@@ -18,7 +18,7 @@ SHM_SIZE=${SHM_SIZE:-"128g"}
 echo "=== [1/2] 准备启动 DCU 容器 ==="
 echo "容器名称: ${CONTAINER_NAME}"
 echo "镜像名称: ${IMAGE_NAME}"
-echo "模型挂载: ${MODEL_PATH} -> /model:ro"
+echo "模型挂载: ${MODEL_PATH} -> /models/hygon/Qwen3.8-27B-Channel-INT8-w8a8:ro"
 echo "项目挂载: ${BENCH_DIR} -> /bench"
 if [ -d "${DATASET_PATH}" ]; then
   echo "数据挂载: ${DATASET_PATH} -> /dataset:ro"
@@ -33,7 +33,7 @@ fi
 # 组装挂载命令
 MOUNT_ARGS=(
   -v /opt/hyhal:/opt/hyhal:ro
-  -v "${MODEL_PATH}:/model:ro"
+  -v "${MODEL_PATH}:/models/hygon/Qwen3.8-27B-Channel-INT8-w8a8:ro"
   -v "${BENCH_DIR}:/bench"
 )
 

@@ -14,7 +14,7 @@ RESULT_BASE_DIR="${PROJECT_DIR}/result/sharegpt"
 
 BASE_URL=${BASE_URL:-"http://127.0.0.1:18680"}
 MODEL_PATH=${MODEL_PATH:-"/model"}
-SERVED_MODEL_NAME=${SERVED_MODEL_NAME:-"Qwen3.8-27B-Channel-INT8-w8a8"}
+SERVED_MODEL_NAME=${SERVED_MODEL_NAME:-"qwen38-vllm021"}
 DATASET_PATH=${DATASET_PATH:-"/dataset/ShareGPT_V3_unfiltered_cleaned_split.json"}
 
 if [ ! -f "${DATASET_PATH}" ]; then

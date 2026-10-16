@@ -83,12 +83,19 @@ bash scripts/start_server.sh
 bash scripts/start_server.sh --daemon
 ```
 
-核心环境变量与启动参数说明：
+核心环境变量与启动参数说明（与目标机实测命令一致，详见 `scripts/start_server.sh`）：
 - `HIP_VISIBLE_DEVICES=0,1`：使用双卡 BW100。
+- `HF_HUB_OFFLINE=1`：离线加载模型，不访问 HuggingFace。
 - `HSA_FORCE_FINE_GRAIN_PCIE=1`：开启细粒度 PCIe 优化。
-- `--tp-size 2`：双卡张量并行。
-- `--dtype bfloat16` 与 `--kv-cache-dtype bfloat16`：计算与缓存数据类型。
-- `--context-length 131072`：最大上下文长度支持 128K。
+- `VLLM_HCU_USE_CUSTOM_QUANTIZATION_GEMM=True`：INT8 W8A8 量化 GEMM 必需。
+- `--tensor-parallel-size 2`：双卡张量并行。
+- `--dtype bfloat16`：激活计算 bfloat16（权重为 INT8 W8A8）。
+- `--quantization compressed-tensors`：W8A8 量化加载方式。
+- `--max-model-len 131072`：最大上下文长度 128K。
+- `--max-num-batched-tokens 16384` / `--max-num-seqs 128`：prefill 批处理上限与最大序列数。
+- `--gdn-prefill-backend triton`：DCU prefill 后端。
+- `--speculative-config '{"method":"mtp","num_speculative_tokens":4}'`：MTP 投机解码。
+- `--compilation-config`：cudagraph 捕获档位覆盖至 128 并发。
 - `--port 18680`：HTTP 推理服务端口，健康检查路径为 `http://127.0.0.1:18680/health`。
 
 ---

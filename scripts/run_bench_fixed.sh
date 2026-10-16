@@ -15,7 +15,7 @@ BENCH_PY="${PROJECT_DIR}/scripts/benchmark.py"
 RESULT_BASE_DIR="${PROJECT_DIR}/result/fixed"
 
 BASE_URL=${BASE_URL:-"http://127.0.0.1:18680"}
-MODEL_NAME=${MODEL_NAME:-"Qwen3.8-27B-Channel-INT8-w8a8"}
+MODEL_NAME=${MODEL_NAME:-"qwen38-vllm021"}
 SCENARIO=${1:-"all"} # 可选: all, 4k, 64k
 
 mkdir -p "${RESULT_BASE_DIR}"
