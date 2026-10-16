@@ -1,0 +1,13 @@
+{
+  "base_url": "http://127.0.0.1:18680",
+  "concurrency": 8,
+  "input_len": 4096,
+  "measure_rounds": 3,
+  "model": "qwen38-vllm021",
+  "output_dir": "/data/tools/vllm-lunch/q38-bw100-sglang/result/fixed/4096in_1024out_c8",
+  "output_len": 1024,
+  "requests_per_round": 16,
+  "seed": 20260912,
+  "timeout": 3600,
+  "warmup_rounds": 2
+}

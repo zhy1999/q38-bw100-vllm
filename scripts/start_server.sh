@@ -2,7 +2,7 @@
 # ==============================================================================
 # 脚本名称: start_server.sh
 # 脚本功能: 启动 vLLM 推理服务 (适用于海光 BW100 双卡平台 + INT8-W8A8 模型)
-# 默认端口: 18580
+# 默认端口: 18680
 # 说明: 基于 vLLM 官方推荐基线参数；W8A8(compressed-tensors) 量化 GEMM 为必选项
 # ==============================================================================
 
@@ -26,7 +26,7 @@ export VLLM_HCU_USE_CUSTOM_QUANTIZATION_GEMM=${VLLM_HCU_USE_CUSTOM_QUANTIZATION_
 MODEL_PATH=${MODEL_PATH:-"/model"}
 SERVED_MODEL_NAME=${SERVED_MODEL_NAME:-"Qwen3.8-27B-Channel-INT8-w8a8"}
 HOST=${HOST:-"0.0.0.0"}
-PORT=${PORT:-18580}
+PORT=${PORT:-18680}
 TP_SIZE=${TP_SIZE:-2}
 DTYPE=${DTYPE:-"bfloat16"}
 CONTEXT_LENGTH=${CONTEXT_LENGTH:-131072}

@@ -1,6 +1,6 @@
 # 精度准入验证
 
-入口为 `bash scripts/run_accuracy.sh {prepare|run|report}`，也可以使用 `bash scripts/run.sh accuracy ...`。评测客户端通过 HTTP 访问已有的 vLLM 服务，默认 `http://127.0.0.1:18580/v1`，模型名与 `start_server.sh` 一致。
+入口为 `bash scripts/run_accuracy.sh {prepare|run|report}`，也可以使用 `bash scripts/run.sh accuracy ...`。评测客户端通过 HTTP 访问已有的 vLLM 服务，默认 `http://127.0.0.1:18680/v1`，模型名与 `start_server.sh` 一致。
 
 脚本使用 **OpenCompass 和 OpenCompass 团队的 VLMEvalKit Python API**：沿用上游提示词、代码执行与评分实现，共用本项目的请求、数据缓存、逐题续跑和报告逻辑。它不调用 `opencompass run.py`，也不依赖性能压测脚本。
 
@@ -76,7 +76,7 @@ python3 scripts/accuracy.py prepare --insecure-dataset-download
 
 ```bash
 bash scripts/run_accuracy.sh run \
-  --base-url http://127.0.0.1:18580/v1 \
+  --base-url http://127.0.0.1:18680/v1 \
   --data-dir /dataset/accuracy \
   --model-revision q38-int8-baseline-server-config-v1 \
   --output-dir result/accuracy/int8-v1

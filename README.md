@@ -89,7 +89,7 @@ bash scripts/start_server.sh --daemon
 - `--tp-size 2`：双卡张量并行。
 - `--dtype bfloat16` 与 `--kv-cache-dtype bfloat16`：计算与缓存数据类型。
 - `--context-length 131072`：最大上下文长度支持 128K。
-- `--port 18580`：HTTP 推理服务端口，健康检查路径为 `http://127.0.0.1:18580/health`。
+- `--port 18680`：HTTP 推理服务端口，健康检查路径为 `http://127.0.0.1:18680/health`。
 
 ---
 
@@ -130,7 +130,7 @@ bash scripts/run_bench_fixed.sh 64k
 如需单独调试或复现某一特定并发（例如 4K 输入、1K 输出、并发 32）：
 ```bash
 python3 -u scripts/benchmark.py \
-  --base-url http://127.0.0.1:18580 \
+  --base-url http://127.0.0.1:18680 \
   --model Qwen3.8-27B-Channel-INT8-w8a8 \
   --output-dir result/fixed/4096in_1024out_c32 \
   --input-len 4096 \
@@ -170,7 +170,7 @@ bash scripts/run_bench_sharegpt.sh
 以并发 32 为例，单轮执行命令为：
 ```bash
 vllm bench serve /model \
-  --base-url http://127.0.0.1:18580 \
+  --base-url http://127.0.0.1:18680 \
   --dataset-name sharegpt \
   --dataset-path /dataset/ShareGPT_V3_unfiltered_cleaned_split.json \
   --model /model \

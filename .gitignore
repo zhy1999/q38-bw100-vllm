@@ -14,11 +14,13 @@ venv/
 /.loopx/
 /.codex/goals/
 
-# Logs & Benchmark results
+# Logs & Benchmark results (评测输出忽略；fixed 评测数据与报告保留)
 logs/*.log
 result/**
 !result/.gitkeep
-
+!result/fixed/
+!result/fixed/**
+!result/benchmark-*.md
 # OS
 .DS_Store
 Thumbs.db

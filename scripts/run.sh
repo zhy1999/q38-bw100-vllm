@@ -17,7 +17,7 @@ SCRIPTS_DIR="${PROJECT_DIR}/scripts"
 
 COMMAND=${1:-"all"}
 
-PORT=${PORT:-18580}
+PORT=${PORT:-18680}
 BASE_URL="http://127.0.0.1:${PORT}"
 
 check_server_ready() {

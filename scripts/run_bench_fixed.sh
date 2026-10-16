@@ -14,7 +14,7 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BENCH_PY="${PROJECT_DIR}/scripts/benchmark.py"
 RESULT_BASE_DIR="${PROJECT_DIR}/result/fixed"
 
-BASE_URL=${BASE_URL:-"http://127.0.0.1:18580"}
+BASE_URL=${BASE_URL:-"http://127.0.0.1:18680"}
 MODEL_NAME=${MODEL_NAME:-"Qwen3.8-27B-Channel-INT8-w8a8"}
 SCENARIO=${1:-"all"} # 可选: all, 4k, 64k
 

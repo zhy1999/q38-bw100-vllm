@@ -52,7 +52,7 @@ export ACCURACY_API_KEY='EMPTY'               # 被测服务无鉴权时可省�
 export ACCURACY_JUDGE_API_KEY='your-judge-key' # Judge 无鉴权时可省略
 
 bash scripts/run_accuracy_native.sh run \
-  --base-url http://127.0.0.1:18580/v1 \
+  --base-url http://127.0.0.1:18680/v1 \
   --model-revision q38-int8-v1 \
   --judge-base-url http://judge-host:8000/v1 \
   --judge-model fixed-judge \
