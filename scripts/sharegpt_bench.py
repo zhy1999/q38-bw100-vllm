@@ -15,7 +15,7 @@ def parse_args():
     p.add_argument('--served-model-name', default='qwen38-vllm021')
     p.add_argument('--tokenizer-dir', default='/data/tools/vllm-lunch/qwen38-tokenizer')
     p.add_argument('--dataset-path', required=True)
-    p.add_argument('--sharegpt-context-len', type=int, default=131072)
+    p.add_argument('--sharegpt-context-len', type=int, default=2048)
     p.add_argument('--num-prompts', type=int, default=1000)
     p.add_argument('--max-concurrency', type=int, default=1)
     p.add_argument('--max-tokens', type=int, default=1024)
@@ -102,8 +102,16 @@ def main():
         send_one(args.base_url, args.served_model_name, prompts[0], args.max_tokens, [])
         print(f'[warmup] {_+1}/{args.warmup_requests}', flush=True)
     t_start = time.perf_counter()
+    done = [0]
+    dlock = threading.Lock()
+    def worker_prog(p):
+        worker(p)
+        with dlock:
+            done[0] += 1
+            if done[0] % 25 == 0 or done[0] == len(prompts):
+                print(f'[progress] {done[0]}/{len(prompts)} requests done', flush=True)
     with ThreadPoolExecutor(max_workers=args.max_concurrency) as ex:
-        list(ex.map(worker, prompts))
+        list(ex.map(worker_prog, prompts))
     wall = time.perf_counter() - t_start
     ok = [r for r in results if 'error' not in r]
     n_out = sum(r['output_tokens'] or 0 for r in ok)
