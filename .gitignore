@@ -14,15 +14,10 @@ venv/
 /.loopx/
 /.codex/goals/
 
-# Logs & Benchmark results (只忽略评测输出，补丁文件保留)
+# Logs & Benchmark results
 logs/*.log
 result/**
 !result/.gitkeep
-!result/*.patch
-!result/apply.sh
-!result/verify.sh
-!result/README.md
-!result/SHA256SUMS
 
 # OS
 .DS_Store
