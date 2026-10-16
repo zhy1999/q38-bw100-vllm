@@ -1,0 +1,19 @@
+diff -ruN a/vllm/platforms/rocm.py b/vllm/platforms/rocm.py
+--- a/vllm/platforms/rocm.py	2026-10-16 02:56:13.951464286 +0000
++++ b/vllm/platforms/rocm.py	2026-10-16 02:56:13.955464290 +0000
+@@ -981,3 +981,15 @@
+         except Exception as e:
+             logger.warning("Failed to get NUMA nodes for GPUs: %s", e)
+             return None
++
++
++def on_gfx936() -> bool:
++    return _ON_GFX936
++
++
++def on_gfx942() -> bool:
++    return _ON_GFX942
++
++
++def on_gfx950() -> bool:
++    return _ON_GFX950

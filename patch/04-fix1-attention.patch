@@ -1,0 +1,14 @@
+diff -ruN a/vllm/model_executor/layers/attention/attention.py b/vllm/model_executor/layers/attention/attention.py
+--- a/vllm/model_executor/layers/attention/attention.py	2026-10-16 02:56:13.959464295 +0000
++++ b/vllm/model_executor/layers/attention/attention.py	2026-10-16 02:56:13.963464300 +0000
+@@ -985,8 +985,8 @@
+         if (
+             not deferred_rotated_producer
+             and attn_metadata is not None
+-            and attn_metadata.num_decodes == 0
+-            and (attn_metadata.num_prefills + attn_metadata.num_extends) > 0
++            and getattr(attn_metadata, "num_decodes", 0) == 0
++            and (getattr(attn_metadata, "num_prefills", 0) + getattr(attn_metadata, "num_extends", 0)) > 0
+             and (
+                 getattr(attn_layer.impl, "use_int8_kv_reset_on_prefill", False)
+                 or getattr(attn_layer.impl, "use_int8_prefill_selective", False)

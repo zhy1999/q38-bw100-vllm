@@ -1,0 +1,14 @@
+diff -ruN a/vllm/model_executor/layers/fla/ops/chunk_o.py b/vllm/model_executor/layers/fla/ops/chunk_o.py
+--- a/vllm/model_executor/layers/fla/ops/chunk_o.py	2026-10-16 02:56:13.943464276 +0000
++++ b/vllm/model_executor/layers/fla/ops/chunk_o.py	2026-10-16 02:56:13.943464276 +0000
+@@ -320,8 +320,8 @@
+     use_share_qk3 = (
+         os.getenv("VLLM_XIANDAO_GDN_CHUNK_O_SHARE_QK3", "1").lower()
+         in ("1", "true", "yes", "on")
+-        and H == 48
+-        and Hg == 16
++        and H in (48, 24)
++        and Hg in (16, 8)
+         and K == 128
+         and V == 128
+         and BT == 64

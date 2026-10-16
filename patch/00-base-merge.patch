@@ -1,0 +1,2890 @@
+Binary files a/vllm/_C.abi3.so and b/vllm/_C.abi3.so differ
+diff -ruN -x __pycache__ -x '*.pyc' a/vllm/_aiter_ops.py b/vllm/_aiter_ops.py
+--- a/vllm/_aiter_ops.py	2026-08-26 10:28:49.000000000 +0000
++++ b/vllm/_aiter_ops.py	2026-10-08 02:37:27.000000000 +0000
+@@ -1354,6 +1354,18 @@
+     _ALL_REDUCE_MAX_SIZE: int = 8192 * 1024 * 8 * 2
+     _CUSTOM_ALL_REDUCE: AiterCustomAllreduceProto | None = None
+ 
++    @staticmethod
++    def _contest_qwen35_default_enabled() -> bool:
++        try:
++            from vllm.config import get_current_vllm_config_or_none
++
++            vllm_config = get_current_vllm_config_or_none()
++            model_config = getattr(vllm_config, "model_config", None)
++            detector = getattr(model_config, "_is_contest_qwen35_27b", None)
++            return bool(detector is not None and detector())
++        except Exception:
++            return False
++
+     @classmethod
+     def refresh_env_variables(cls):
+         """
+@@ -1446,7 +1458,7 @@
+     @classmethod
+     @if_aiter_supported
+     def is_enabled(cls) -> bool:
+-        return cls._AITER_ENABLED
++        return cls._AITER_ENABLED or cls._contest_qwen35_default_enabled()
+ 
+     @classmethod
+     @if_aiter_supported
+@@ -1532,7 +1544,10 @@
+     @classmethod
+     @if_aiter_supported
+     def is_triton_unified_attn_enabled(cls) -> bool:
+-        return cls._AITER_ENABLED and cls._TRITON_UNIFIED_ATTN_ENABLED
++        return cls.is_enabled() and (
++            cls._TRITON_UNIFIED_ATTN_ENABLED
++            or cls._contest_qwen35_default_enabled()
++        )
+ 
+     @classmethod
+     @if_aiter_supported
+@@ -2179,7 +2194,38 @@
+         flash_layout: bool,
+         apply_scale: bool,
+     ):
+-        from aiter.ops.triton.fused_kv_cache import fused_qk_rope_reshape_and_cache
++        try:
++            from aiter.ops.triton.fused_kv_cache import (
++                fused_qk_rope_reshape_and_cache,
++            )
++        except ModuleNotFoundError as exc:
++            if (
++                exc.name != "aiter.ops.triton.fused_kv_cache"
++                or not flash_layout
++                or apply_scale
++            ):
++                raise
++            from vllm import _custom_ops as ops
++
++            ops.rotary_embedding(
++                positions,
++                query,
++                key,
++                query.shape[-1],
++                cos_sin_cache,
++                is_neox,
++            )
++            ops.reshape_and_cache_flash(
++                key,
++                value,
++                key_cache,
++                value_cache,
++                layer_slot_mapping,
++                "auto",
++                k_scale,
++                v_scale,
++            )
++            return
+ 
+         cos, sin = cos_sin_cache.chunk(2, dim=-1)
+         fused_qk_rope_reshape_and_cache(
+@@ -2420,27 +2466,58 @@
+         to allow explicit backend selection via attention_config to work
+         even when VLLM_ROCM_USE_AITER=0.
+ 
+-        Note: This performs lazy import of aiter.flash_attn_varlen_func
++        Note: This performs lazy import of the AITER varlen flash attention
++        entrypoint. Some contest images ship an AITER package without the
++        legacy top-level function, but with the Triton varlen implementation
++        under aiter.ops.triton.flash_attention_forward.
+         """
+-        from aiter import flash_attn_varlen_func
++        try:
++            from aiter import flash_attn_varlen_func
+ 
+-        return flash_attn_varlen_func(
+-            q=q,
+-            k=k,
+-            v=v,
+-            cu_seqlens_q=cu_seqlens_q,
+-            cu_seqlens_k=cu_seqlens_k,
+-            max_seqlen_q=max_seqlen_q,
+-            max_seqlen_k=max_seqlen_k,
+-            min_seqlen_q=min_seqlen_q,
+-            dropout_p=dropout_p,
+-            softmax_scale=softmax_scale,
+-            causal=causal,
+-            window_size=window_size,
+-            alibi_slopes=alibi_slopes,
+-            return_lse=return_lse,
+-            out=out,
+-        )
++            return flash_attn_varlen_func(
++                q=q,
++                k=k,
++                v=v,
++                cu_seqlens_q=cu_seqlens_q,
++                cu_seqlens_k=cu_seqlens_k,
++                max_seqlen_q=max_seqlen_q,
++                max_seqlen_k=max_seqlen_k,
++                min_seqlen_q=min_seqlen_q,
++                dropout_p=dropout_p,
++                softmax_scale=softmax_scale,
++                causal=causal,
++                window_size=window_size,
++                alibi_slopes=alibi_slopes,
++                return_lse=return_lse,
++                out=out,
++            )
++        except ImportError:
++            if dropout_p != 0.0:
++                raise
++            if alibi_slopes is not None:
++                raise
++            if window_size not in (None, (-1, -1)):
++                raise
++            if softmax_scale is None:
++                softmax_scale = q.shape[-1] ** -0.5
++
++            if return_lse:
++                raise
++            from aiter.ops.triton.flash_attention_forward import triton_attention
++
++            result, _ = triton_attention(
++                q,
++                k,
++                v,
++                out,
++                cu_seqlens_q,
++                cu_seqlens_k,
++                max_seqlen_q,
++                max_seqlen_k,
++                causal,
++                softmax_scale,
++            )
++            return result
+ 
+     @staticmethod
+     def pa_fwd_asm(
+diff -ruN -x __pycache__ -x '*.pyc' a/vllm/_custom_ops.py b/vllm/_custom_ops.py
+--- a/vllm/_custom_ops.py	2026-08-26 10:27:50.000000000 +0000
++++ b/vllm/_custom_ops.py	2026-10-08 02:37:27.000000000 +0000
+@@ -246,6 +246,250 @@
+     )
+ 
+ 
++def paged_attention_int8_kv(
++    out: torch.Tensor,
++    exp_sum: torch.Tensor,
++    max_logits: torch.Tensor,
++    tmp_out: torch.Tensor,
++    query: torch.Tensor,
++    key_cache: torch.Tensor,
++    value_cache: torch.Tensor,
++    num_kv_heads: int,
++    scale: float,
++    block_tables: torch.Tensor,
++    seq_lens: torch.Tensor,
++    query_start_loc: torch.Tensor | None,
++    block_size: int,
++    max_seq_len: int,
++    k_scale: torch.Tensor,
++    v_scale: torch.Tensor,
++    query_int8: torch.Tensor | None = None,
++    query_int8_scale: torch.Tensor | None = None,
++) -> None:
++    torch.ops._rocm_C.paged_attention_int8_kv(
++        out,
++        exp_sum,
++        max_logits,
++        tmp_out,
++        query,
++        key_cache,
++        value_cache,
++        num_kv_heads,
++        scale,
++        block_tables,
++        seq_lens,
++        query_start_loc,
++        block_size,
++        max_seq_len,
++        None,
++        "int8_per_token_head",
++        k_scale,
++        v_scale,
++        None,
++        "int8" if query_int8 is not None else "f16",
++        query_int8,
++        query_int8_scale,
++    )
++
++
++def gfx936_qk_mmac_tile(
++    out: torch.Tensor,
++    query: torch.Tensor,
++    key_cache: torch.Tensor,
++    k_scale: torch.Tensor,
++    block_ids: torch.Tensor,
++    slot_starts: torch.Tensor,
++    kv_head_idx: int = 0,
++) -> None:
++    torch.ops._rocm_C.gfx936_qk_mmac_tile(
++        out,
++        query,
++        key_cache,
++        k_scale,
++        block_ids,
++        slot_starts,
++        kv_head_idx,
++    )
++
++
++def gfx936_int8_qk_mmac_tile(
++    out: torch.Tensor,
++    query: torch.Tensor,
++    query_scale: torch.Tensor,
++    key_cache: torch.Tensor,
++    k_scale: torch.Tensor,
++    block_ids: torch.Tensor,
++    slot_starts: torch.Tensor,
++    kv_head_idx: int = 0,
++) -> None:
++    torch.ops._rocm_C.gfx936_int8_qk_mmac_tile(
++        out,
++        query,
++        query_scale,
++        key_cache,
++        k_scale,
++        block_ids,
++        slot_starts,
++        kv_head_idx,
++    )
++
++
++def qwen_rotary_and_cache_int8_strided(
++    query: torch.Tensor,
++    key: torch.Tensor,
++    value: torch.Tensor,
++    query_int8: torch.Tensor,
++    q_scale: torch.Tensor,
++    positions: torch.Tensor,
++    cos_sin_cache: torch.Tensor,
++    is_neox: bool,
++    key_cache: torch.Tensor,
++    value_cache: torch.Tensor,
++    k_scale_cache: torch.Tensor,
++    v_scale_cache: torch.Tensor,
++    slot_mapping: torch.Tensor,
++    waves_per_block: int = 1,
++    write_rotated_qk: bool = True,
++    input_is_rotated: bool = False,
++) -> None:
++    torch.ops._rocm_C.qwen_rotary_and_cache_int8_strided(
++        query,
++        key,
++        value,
++        query_int8,
++        q_scale,
++        positions,
++        cos_sin_cache,
++        is_neox,
++        key_cache,
++        value_cache,
++        k_scale_cache,
++        v_scale_cache,
++        slot_mapping,
++        waves_per_block,
++        write_rotated_qk,
++        input_is_rotated,
++    )
++
++
++def qwen_rotary_and_cache_int8_strided_kv_only(
++    query: torch.Tensor,
++    key: torch.Tensor,
++    value: torch.Tensor,
++    positions: torch.Tensor,
++    cos_sin_cache: torch.Tensor,
++    is_neox: bool,
++    key_cache: torch.Tensor,
++    value_cache: torch.Tensor,
++    k_scale_cache: torch.Tensor,
++    v_scale_cache: torch.Tensor,
++    slot_mapping: torch.Tensor,
++) -> None:
++    torch.ops._rocm_C.qwen_rotary_and_cache_int8_strided_kv_only(
++        query,
++        key,
++        value,
++        positions,
++        cos_sin_cache,
++        is_neox,
++        key_cache,
++        value_cache,
++        k_scale_cache,
++        v_scale_cache,
++        slot_mapping,
++    )
++
++
++def gfx936_int8_prefix_attention(
++    out: torch.Tensor,
++    lse: torch.Tensor | None,
++    query: torch.Tensor,
++    query_scale: torch.Tensor,
++    key_cache: torch.Tensor,
++    value_cache: torch.Tensor,
++    k_scale: torch.Tensor,
++    v_scale: torch.Tensor,
++    block_tables: torch.Tensor,
++    context_lens: torch.Tensor,
++    query_start_loc: torch.Tensor,
++    softmax_scale: float,
++    max_query_len: int,
++    num_kv_heads: int,
++    use_int8_pv: bool = True,
++    use_vector_loads: bool = True,
++    use_resident_q: bool = True,
++    all_int8_extend: bool = False,
++    query_tile_128: bool = False,
++) -> None:
++    torch.ops._rocm_C.gfx936_int8_prefix_attention(
++        out,
++        lse,
++        query,
++        query_scale,
++        key_cache,
++        value_cache,
++        k_scale,
++        v_scale,
++        block_tables,
++        context_lens,
++        query_start_loc,
++        softmax_scale,
++        max_query_len,
++        num_kv_heads,
++        use_int8_pv,
++        use_vector_loads,
++        use_resident_q,
++        all_int8_extend,
++        query_tile_128,
++    )
++
++
++def gfx936_int8_history_bf16_current_attention(
++    out: torch.Tensor,
++    lse: torch.Tensor | None,
++    query_bf16: torch.Tensor,
++    query_int8: torch.Tensor | None,
++    query_scale: torch.Tensor | None,
++    key_cache: torch.Tensor,
++    value_cache: torch.Tensor,
++    k_scale: torch.Tensor,
++    v_scale: torch.Tensor,
++    current_key: torch.Tensor,
++    current_value: torch.Tensor,
++    block_tables: torch.Tensor,
++    context_lens: torch.Tensor,
++    query_start_loc: torch.Tensor,
++    softmax_scale: float,
++    max_query_len: int,
++    num_kv_heads: int,
++    resident_q_mode: int = 3,
++    fuse_q_quant: bool = False,
++    stage_current_value: bool = False,
++) -> None:
++    torch.ops._rocm_C.gfx936_int8_history_bf16_current_attention(
++        out,
++        lse,
++        query_bf16,
++        query_int8,
++        query_scale,
++        key_cache,
++        value_cache,
++        k_scale,
++        v_scale,
++        current_key,
++        current_value,
++        block_tables,
++        context_lens,
++        query_start_loc,
++        softmax_scale,
++        max_query_len,
++        num_kv_heads,
++        resident_q_mode,
++        fuse_q_quant,
++        stage_current_value,
++    )
++
++
+ def mla_decode_kvcache_cpu(
+     out: torch.Tensor,
+     query: torch.Tensor,
+@@ -2317,6 +2561,12 @@
+     return torch.ops._rocm_C.wvSplitK(a, b, bias, cu_count)
+ 
+ 
++def wvSplitKQwenN1(
++    a: torch.Tensor, b: torch.Tensor, variant: int, cu_count: int
++) -> torch.Tensor:
++    return torch.ops._rocm_C.wvSplitKQwenN1(a, b, variant, cu_count)
++
++
+ def wvSplitKrc(
+     a: torch.Tensor, b: torch.Tensor, cu_count: int, bias: torch.Tensor = None
+ ) -> torch.Tensor:
+@@ -2733,6 +2983,50 @@
+     )
+ 
+ 
++def reshape_and_cache_int8_per_token_head(
++    key: torch.Tensor,
++    value: torch.Tensor,
++    key_cache: torch.Tensor,
++    value_cache: torch.Tensor,
++    k_scale_cache: torch.Tensor,
++    v_scale_cache: torch.Tensor,
++    slot_mapping: torch.Tensor,
++) -> None:
++    torch.ops._rocm_C.reshape_and_cache_int8_per_token_head(
++        key,
++        value,
++        key_cache,
++        value_cache,
++        k_scale_cache,
++        v_scale_cache,
++        slot_mapping,
++    )
++
++
++def quantize_bf16_paged_kv_cache_int8(
++    key_cache: torch.Tensor,
++    value_cache: torch.Tensor,
++    int8_key_cache: torch.Tensor,
++    int8_value_cache: torch.Tensor,
++    k_scale_cache: torch.Tensor,
++    v_scale_cache: torch.Tensor,
++    block_tables: torch.Tensor,
++    context_lens: torch.Tensor,
++    max_context_len: int,
++) -> None:
++    torch.ops._rocm_C.quantize_bf16_paged_kv_cache_int8(
++        key_cache,
++        value_cache,
++        int8_key_cache,
++        int8_value_cache,
++        k_scale_cache,
++        v_scale_cache,
++        block_tables,
++        context_lens,
++        max_context_len,
++    )
++
++
+ def concat_and_cache_mla(
+     kv_c: torch.Tensor,
+     k_pe: torch.Tensor,
+Binary files a/vllm/_moe_C.abi3.so and b/vllm/_moe_C.abi3.so differ
+Binary files a/vllm/_rocm_C.abi3.so and b/vllm/_rocm_C.abi3.so differ
+diff -ruN -x __pycache__ -x '*.pyc' a/vllm/compilation/passes/fusion/rope_kvcache_fusion.py b/vllm/compilation/passes/fusion/rope_kvcache_fusion.py
+--- a/vllm/compilation/passes/fusion/rope_kvcache_fusion.py	2026-08-26 10:27:50.000000000 +0000
++++ b/vllm/compilation/passes/fusion/rope_kvcache_fusion.py	2026-10-08 02:37:27.000000000 +0000
+@@ -53,8 +53,30 @@
+     the data dependency between them to ensure torch.compile preserves ordering.
+     """
+     layer_name = _resolve_layer_name(layer_name)
+-    _, attn_layer, kv_cache, layer_slot_mapping = get_attention_context(layer_name)
++    attn_metadata, attn_layer, kv_cache, layer_slot_mapping = get_attention_context(
++        layer_name
++    )
+     if layer_slot_mapping is not None:
++        if attn_metadata is not None and (
++            getattr(attn_layer.impl, "use_int8_kv_reset_on_prefill", False)
++            or getattr(attn_layer.impl, "use_int8_prefill_selective", False)
++            or getattr(
++                attn_layer.impl,
++                "use_int8_kv_fused_extend_producer",
++                False,
++            )
++            or getattr(
++                attn_layer.impl,
++                "use_int8_kv_batched_decode_producer",
++                False,
++            )
++            or getattr(
++                attn_layer.impl,
++                "use_int8_kv_decode_fused_producer",
++                False,
++            )
++        ):
++            attn_layer.impl.prepare_kv_cache_update(attn_layer, attn_metadata)
+         attn_layer.impl.do_rope_and_kv_cache_update(
+             attn_layer,
+             query,
+@@ -248,6 +270,11 @@
+         self.max_token_num = cc.pass_config.rope_kvcache_fusion_max_token_num
+ 
+         attn_layers = get_layers_from_vllm_config(config, Attention)
++        self.force_int8_extend_fusion = any(
++            getattr(layer.impl, "use_int8_kv_fused_extend_producer", False)
++            or getattr(layer.impl, "use_int8_prefill_selective", False)
++            for layer in attn_layers.values()
++        )
+         # When _USE_LAYERNAME is enabled, layer_name is a wildcard so all
+         # layers produce the same pattern — register once then break.
+         for _, layer in attn_layers.items():
+@@ -265,7 +292,13 @@
+     @VllmInductorPass.time_and_log
+     def __call__(self, graph: fx.Graph) -> None:
+         self.matched_count = self.patterns.apply(graph)
+-        logger.debug("Replaced %s patterns", self.matched_count)
++        if self.matched_count:
++            logger.info(
++                "XianDao RoPE/KV cache fusion replaced %s patterns",
++                self.matched_count,
++            )
++        else:
++            logger.debug("Replaced %s patterns", self.matched_count)
+ 
+     def is_applicable_for_range(self, compile_range: Range) -> bool:
+         # This pass works best for the small-batch decode setting.
+diff -ruN -x __pycache__ -x '*.pyc' a/vllm/config/model.py b/vllm/config/model.py
+--- a/vllm/config/model.py	2026-08-26 10:28:49.000000000 +0000
++++ b/vllm/config/model.py	2026-10-08 02:37:27.000000000 +0000
+@@ -635,6 +635,17 @@
+         # Init multimodal config if needed
+         if self._model_info.supports_multimodal:
+             if (
++                self._is_contest_qwen35_27b()
++                and not language_model_only
++                and not limit_mm_per_prompt
++                and not enable_mm_embeds
++            ):
++                language_model_only = True
++                logger.info(
++                    "Defaulting Qwen3.5-27B to language-model-only mode for "
++                    "text-only serving."
++                )
++            if (
+                 mm_encoder_tp_mode == "data"
+                 and not self._model_info.supports_multimodal_encoder_tp_data
+             ):
+@@ -1678,6 +1689,7 @@
+         return self.get_hidden_size()
+ 
+     def get_and_verify_max_len(self, max_model_len: int):
++        requested_max_model_len = max_model_len
+         # Consider max_model_len in tokenizer_config only when
+         # pooling models use absolute position_embedding.
+         tokenizer_config = None
+@@ -1700,9 +1712,54 @@
+             spec_target_max_model_len=self.spec_target_max_model_len,
+             encoder_config=self.encoder_config,
+         )
++        is_contest_qwen35_27b = self._is_contest_qwen35_27b()
++        if is_contest_qwen35_27b:
++            self._enable_contest_qwen35_aiter_defaults()
++        if requested_max_model_len is None and is_contest_qwen35_27b:
++            contest_max_model_len = 32768
++            if max_model_len > contest_max_model_len:
++                logger.info(
++                    "Capping Qwen3.5-27B default max model len from %s to %s",
++                    max_model_len,
++                    contest_max_model_len,
++                )
++                max_model_len = contest_max_model_len
+         logger.info("Using max model len %s", max_model_len)
+         return max_model_len
+ 
++    def _is_contest_qwen35_27b(self) -> bool:
++        model_identifiers = (
++            self.model,
++            self.hf_config_path,
++            getattr(self.hf_config, "_name_or_path", None),
++            getattr(self.hf_text_config, "_name_or_path", None),
++        )
++        return any(
++            "qwen3.5-27b" in str(identifier).lower()
++            for identifier in model_identifiers
++            if identifier is not None
++        )
++
++    @staticmethod
++    def _enable_contest_qwen35_aiter_defaults() -> None:
++        try:
++            import os
++
++            from vllm._aiter_ops import rocm_aiter_ops
++
++            os.environ.setdefault("VLLM_ROCM_USE_AITER", "1")
++            os.environ.setdefault("VLLM_ROCM_USE_AITER_MHA", "1")
++            os.environ.setdefault("VLLM_ROCM_FORCE_AITER_FA_ON_BW", "1")
++            os.environ.setdefault("VLLM_ROCM_USE_AITER_UNIFIED_ATTENTION", "1")
++            rocm_aiter_ops._AITER_ENABLED = True
++            rocm_aiter_ops._TRITON_UNIFIED_ATTN_ENABLED = True
++            logger.info_once(
++                "Defaulting Qwen3.5-27B to ROCm AITER Flash Attention with "
++                "Unified Attention fallback."
++            )
++        except Exception:
++            logger.debug("Failed to enable Qwen3.5 AITER defaults.", exc_info=True)
++
+     @property
+     def attn_type(self) -> AttnTypeStr:
+         """Determine the attention type based on model configuration."""
+diff -ruN -x __pycache__ -x '*.pyc' a/vllm/config/vllm.py b/vllm/config/vllm.py
+--- a/vllm/config/vllm.py	2026-08-26 10:28:49.000000000 +0000
++++ b/vllm/config/vllm.py	2026-10-08 02:37:27.000000000 +0000
+@@ -146,14 +146,24 @@
+     """
+     from vllm._aiter_ops import rocm_aiter_ops
+ 
++    int8_fused_extend = os.getenv(
++        "VLLM_XIANDAO_INT8_KV_FUSED_EXTEND_PRODUCER", "1"
++    ).lower() in ("1", "true", "yes", "on")
++    int8_selective_prefill = os.getenv(
++        "VLLM_XIANDAO_INT8_PREFILL_SELECTIVE", "1"
++    ).lower() in ("1", "true", "yes", "on")
+     return (
+-        rocm_aiter_ops.is_enabled()
+-        and cfg.compilation_config.is_custom_op_enabled("rotary_embedding")
+-        and (
+-            cfg.compilation_config.use_inductor_graph_partition
+-            or not cfg.compilation_config.splitting_ops_contain_kv_cache_update()
+-        )
++int8_fused_extend
++or int8_selective_prefill
++or (
++    rocm_aiter_ops.is_enabled()
++    and cfg.compilation_config.is_custom_op_enabled("rotary_embedding")
++    and (
++        cfg.compilation_config.use_inductor_graph_partition
++        or not cfg.compilation_config.splitting_ops_contain_kv_cache_update()
+     )
++)
++        )
+ 
+ 
+ def enable_norm_pad_fusion(cfg: "VllmConfig") -> bool:
+@@ -1013,6 +1023,13 @@
+ 
+         default_config = OPTIMIZATION_LEVEL_TO_CONFIG[self.optimization_level]
+         self._apply_optimization_level_defaults(default_config)
++        if (
++            self.compilation_config.pass_config.fuse_rope_kvcache
++            and "+rotary_embedding" not in self.compilation_config.custom_ops
++        ):
++            # Optimization-level defaults are resolved after CompilationConfig
++            # initialization, so synchronize the custom-op requirement here.
++            self.compilation_config.custom_ops.append("+rotary_embedding")
+         if self.kernel_config.enable_flashinfer_autotune is None:
+             raise ValueError(
+                 "KernelConfig.enable_flashinfer_autotune must be set after applying "
+Binary files a/vllm/cumem_allocator.abi3.so and b/vllm/cumem_allocator.abi3.so differ
+diff -ruN -x __pycache__ -x '*.pyc' a/vllm/model_executor/layers/attention/attention.py b/vllm/model_executor/layers/attention/attention.py
+--- a/vllm/model_executor/layers/attention/attention.py	2026-08-26 10:28:49.000000000 +0000
++++ b/vllm/model_executor/layers/attention/attention.py	2026-10-08 02:37:27.000000000 +0000
+@@ -417,6 +417,10 @@
+         # shape does not match the query shape, so we optionally let the model
+         # definition specify the output tensor shape.
+         output_shape: torch.Size | None = None,
++        fused_rope_kvcache_inputs: tuple[
++            torch.Tensor, torch.Tensor, bool
++        ]
++        | None = None,
+     ) -> torch.Tensor:
+         """
+         The KV cache is stored inside this class and is accessed via
+@@ -540,6 +544,12 @@
+     def get_kv_cache_spec(self, vllm_config: VllmConfig) -> KVCacheSpec | None:
+         # Block size may get updated after model loading, refresh it
+         block_size = vllm_config.cache_config.block_size
++        runtime_memory_per_token = 0
++        get_runtime_memory = getattr(
++            self.impl, "get_kv_cache_runtime_memory_per_token", None
++        )
++        if get_runtime_memory is not None:
++            runtime_memory_per_token = get_runtime_memory()
+         # Should not be called for enc-dec or encoder-only attention.
+         assert self.attn_type == AttentionType.DECODER
+         quant_mode = get_kv_quant_mode(self.kv_cache_dtype)
+@@ -555,6 +565,7 @@
+                 dtype=self.kv_cache_torch_dtype,
+                 kv_quant_mode=quant_mode,
+                 sliding_window=self.sliding_window,
++                runtime_memory_per_token=runtime_memory_per_token,
+             )
+         elif self.kv_cache_dtype.startswith("turboquant_"):
+             from vllm.model_executor.layers.quantization.turboquant.config import (
+@@ -870,6 +881,91 @@
+     return attn_metadata, attn_layer, kv_cache, layer_slot_mapping
+ 
+ 
++def _uses_deferred_rotated_qkv_producer(
++    attn_layer: "Attention | MLAAttention",
++    attn_metadata: Any,
++) -> bool:
++    if attn_metadata is None or not getattr(
++        attn_layer.impl, "use_int8_rotated_kv_producer", False
++    ):
++        return False
++    decode_metadata = attn_metadata.decode_metadata
++    return bool(
++        attn_metadata.num_decodes > 0
++        and attn_metadata.num_decode_tokens == attn_metadata.num_actual_tokens
++        and attn_metadata.num_decode_tokens == attn_metadata.num_decodes
++        and attn_metadata.num_prefills == 0
++        and attn_metadata.num_extends == 0
++        and decode_metadata is not None
++        and decode_metadata.max_query_len == 1
++    )
++
++
++def _run_deferred_rotated_qkv_producer(
++    query: torch.Tensor,
++    key: torch.Tensor,
++    value: torch.Tensor,
++    attn_metadata: Any,
++    attn_layer: "Attention | MLAAttention",
++    kv_cache: torch.Tensor,
++    layer_slot_mapping: torch.Tensor | None,
++) -> None:
++    if layer_slot_mapping is None or not _uses_deferred_rotated_qkv_producer(
++        attn_layer, attn_metadata
++    ):
++        return
++    attn_layer.impl.prepare_kv_cache_update(attn_layer, attn_metadata)
++    produced = attn_layer.impl.do_rotated_qkv_cache_update(
++        attn_layer,
++        query,
++        key,
++        value,
++        kv_cache,
++        layer_slot_mapping,
++    )
++    assert produced, "Deferred rotated Q/K/V producer did not execute"
++
++
++@maybe_transfer_kv_layer
++def unified_attention(
++    query: torch.Tensor,
++    key: torch.Tensor,
++    value: torch.Tensor,
++    layer_name: str,
++) -> torch.Tensor:
++    attn_metadata, self, kv_cache, layer_slot_mapping = get_attention_context(
++        layer_name
++    )
++    _run_deferred_rotated_qkv_producer(
++        query,
++        key,
++        value,
++        attn_metadata,
++        self,
++        kv_cache,
++        layer_slot_mapping,
++    )
++    output = self.impl.forward(self, query, key, value, kv_cache, attn_metadata)
++
++    return output
++
++
++def unified_attention_fake(
++    query: torch.Tensor,
++    key: torch.Tensor,
++    value: torch.Tensor,
++    layer_name: str,
++) -> torch.Tensor:
++    return torch.empty_like(query).contiguous()
++
++
++direct_register_custom_op(
++    op_name="unified_attention",
++    op_func=unified_attention,
++    fake_impl=unified_attention_fake,
++)
++
++
+ def unified_kv_cache_update(
+     key: torch.Tensor,
+     value: torch.Tensor,
+@@ -879,19 +975,36 @@
+     Returns a dummy that is passed to unified_attention to signal a side effect and
+     the data dependency between them to ensure torch.compile preserves ordering.
+     """
+-    layer_name = _resolve_layer_name(layer_name)
+-    _, attn_layer, kv_cache, layer_slot_mapping = get_attention_context(layer_name)
++    attn_metadata, attn_layer, kv_cache, layer_slot_mapping = get_attention_context(
++        layer_name
++    )
+     if layer_slot_mapping is not None:
+-        assert hasattr(attn_layer.impl, "do_kv_cache_update"), (
+-            f"{attn_layer.impl.__class__.__name__} does not support kv cache update"
+-        )
+-        attn_layer.impl.do_kv_cache_update(  # type: ignore[attr-defined]
+-            attn_layer,
+-            key,
+-            value,
+-            kv_cache,
+-            layer_slot_mapping,
++        deferred_rotated_producer = _uses_deferred_rotated_qkv_producer(
++            attn_layer, attn_metadata
+         )
++        if (
++            not deferred_rotated_producer
++            and attn_metadata is not None
++            and attn_metadata.num_decodes == 0
++            and (attn_metadata.num_prefills + attn_metadata.num_extends) > 0
++            and (
++                getattr(attn_layer.impl, "use_int8_kv_reset_on_prefill", False)
++                or getattr(attn_layer.impl, "use_int8_prefill_selective", False)
++            )
++        ):
++            attn_layer.impl.prepare_kv_cache_update(attn_layer, attn_metadata)
++        if not deferred_rotated_producer:
++            assert hasattr(attn_layer.impl, "do_kv_cache_update"), (
++                f"{attn_layer.impl.__class__.__name__} does not support "
++                "kv cache update"
++            )
++            attn_layer.impl.do_kv_cache_update(
++                attn_layer,
++                key,
++                value,
++                kv_cache,
++                layer_slot_mapping,
++            )
+ 
+     if get_hcu_flash_attn_mode() == "custom":
+         return torch.empty(0, device=key.device, dtype=key.dtype)
+@@ -930,8 +1043,18 @@
+     # that ensures torch.compile preserves ordering between KV cache update and
+     # attention forward.
+     del kv_cache_dummy_dep
+-    layer_name = _resolve_layer_name(layer_name)
+-    attn_metadata, self, kv_cache, _ = get_attention_context(layer_name)
++    attn_metadata, self, kv_cache, layer_slot_mapping = get_attention_context(
++        layer_name
++    )
++    _run_deferred_rotated_qkv_producer(
++        query,
++        key,
++        value,
++        attn_metadata,
++        self,
++        kv_cache,
++        layer_slot_mapping,
++    )
+ 
+     self.impl.forward(
+         self,
+diff -ruN -x __pycache__ -x '*.pyc' a/vllm/model_executor/layers/fla/ops/chunk_o.py b/vllm/model_executor/layers/fla/ops/chunk_o.py
+--- a/vllm/model_executor/layers/fla/ops/chunk_o.py	2026-08-26 10:28:49.000000000 +0000
++++ b/vllm/model_executor/layers/fla/ops/chunk_o.py	2026-10-08 02:37:27.000000000 +0000
+@@ -10,6 +10,8 @@
+ # ruff: noqa: E501
+ 
+ 
++import os
++
+ import torch
+ 
+ from vllm.triton_utils import tl, triton
+@@ -141,6 +143,151 @@
+     tl.store(p_o, b_o.to(p_o.dtype.element_ty), boundary_check=(0, 1))
+ 
+ 
++@triton.heuristics(
++    {
++        "USE_G": lambda args: args["g"] is not None,
++        "IS_VARLEN": lambda args: args["cu_seqlens"] is not None,
++    }
++)
++@triton.autotune(
++    configs=[
++        triton.Config({"BK": BK}, num_warps=num_warps, num_stages=2)
++        for BK in [64, 128]
++        for num_warps in [4, 8]
++    ],
++    key=["K", "BT"],
++)
++@triton.jit(do_not_specialize=["T"])
++def chunk_fwd_kernel_o_share_qk3(
++    q,
++    k,
++    v,
++    h,
++    g,
++    o,
++    cu_seqlens,
++    chunk_indices,
++    scale,
++    T,
++    H: tl.constexpr,
++    Hg: tl.constexpr,
++    K: tl.constexpr,
++    V: tl.constexpr,
++    BT: tl.constexpr,
++    BK: tl.constexpr,
++    USE_G: tl.constexpr,
++    IS_VARLEN: tl.constexpr,
++):
++    i_t, i_bhg = tl.program_id(0), tl.program_id(1)
++    i_b, i_hg = i_bhg // Hg, i_bhg % Hg
++
++    if IS_VARLEN:
++        i_tg = i_t
++        i_n, i_t = (
++            tl.load(chunk_indices + i_t * 2).to(tl.int32),
++            tl.load(chunk_indices + i_t * 2 + 1).to(tl.int32),
++        )
++        bos, eos = (
++            tl.load(cu_seqlens + i_n).to(tl.int32),
++            tl.load(cu_seqlens + i_n + 1).to(tl.int32),
++        )
++        T = eos - bos
++    else:
++        NT = tl.cdiv(T, BT)
++        i_tg = i_b * NT + i_t
++        bos = i_b * T
++
++    q_head = q + (bos * Hg + i_hg) * K
++    k_head = k + (bos * Hg + i_hg) * K
++    value_head0 = i_hg * 3
++
++    b_A = tl.zeros([BT, BT], dtype=tl.float32)
++    b_o = tl.zeros([BT, V], dtype=tl.float32)
++
++    # Head zero computes its QH output while the shared raw QK matrix is live.
++    h0 = h + (i_tg * H + value_head0).to(tl.int64) * V * K
++    for i_k in range(tl.cdiv(K, BK)):
++        p_q = tl.make_block_ptr(
++            q_head, (T, K), (Hg * K, 1), (i_t * BT, i_k * BK),
++            (BT, BK), (1, 0)
++        )
++        p_k = tl.make_block_ptr(
++            k_head, (K, T), (1, Hg * K), (i_k * BK, i_t * BT),
++            (BK, BT), (0, 1)
++        )
++        p_h = tl.make_block_ptr(
++            h0, (V, K), (K, 1), (0, i_k * BK), (V, BK), (1, 0)
++        )
++        b_q = tl.load(p_q, boundary_check=(0, 1))
++        b_k = tl.load(p_k, boundary_check=(0, 1))
++        b_h = tl.load(p_h, boundary_check=(0, 1))
++        b_o += tl.dot(b_q, tl.trans(b_h))
++        b_A += tl.dot(b_q, b_k)
++
++    o_t = i_t * BT + tl.arange(0, BT)
++    m_t = o_t < T
++    m_A = (o_t[:, None] >= o_t[None, :]) & (m_t[:, None] & m_t)
++
++    if USE_G:
++        g0 = g + bos * H + value_head0
++        p_g = tl.make_block_ptr(g0, (T,), (H,), (i_t * BT,), (BT,), (0,))
++        b_g = tl.load(p_g, boundary_check=(0,))
++        b_o = b_o * exp(b_g)[:, None]
++        b_A_head = b_A * exp(b_g[:, None] - b_g[None, :])
++    else:
++        b_A_head = b_A
++    b_A_head = tl.where(m_A, b_A_head, 0)
++    v0 = v + (bos * H + value_head0) * V
++    o0 = o + (bos * H + value_head0) * V
++    p_v = tl.make_block_ptr(v0, (T, V), (H * V, 1), (i_t * BT, 0),
++                            (BT, V), (1, 0))
++    p_o = tl.make_block_ptr(o0, (T, V), (H * V, 1), (i_t * BT, 0),
++                            (BT, V), (1, 0))
++    b_v = tl.load(p_v, boundary_check=(0, 1))
++    b_out = b_o * scale + tl.dot(b_A_head.to(b_v.dtype), b_v) * scale
++    tl.store(p_o, b_out.to(p_o.dtype.element_ty), boundary_check=(0, 1))
++
++    # The remaining two value heads reuse b_A and never load K.
++    for value_delta in tl.static_range(1, 3):
++        value_head = value_head0 + value_delta
++        h_head = h + (i_tg * H + value_head).to(tl.int64) * V * K
++        b_o = tl.zeros([BT, V], dtype=tl.float32)
++        for i_k in range(tl.cdiv(K, BK)):
++            p_q = tl.make_block_ptr(
++                q_head, (T, K), (Hg * K, 1), (i_t * BT, i_k * BK),
++                (BT, BK), (1, 0)
++            )
++            p_h = tl.make_block_ptr(
++                h_head, (V, K), (K, 1), (0, i_k * BK), (V, BK), (1, 0)
++            )
++            b_q = tl.load(p_q, boundary_check=(0, 1))
++            b_h = tl.load(p_h, boundary_check=(0, 1))
++            b_o += tl.dot(b_q, tl.trans(b_h))
++
++        if USE_G:
++            g_head = g + bos * H + value_head
++            p_g = tl.make_block_ptr(
++                g_head, (T,), (H,), (i_t * BT,), (BT,), (0,)
++            )
++            b_g = tl.load(p_g, boundary_check=(0,))
++            b_o = b_o * exp(b_g)[:, None]
++            b_A_head = b_A * exp(b_g[:, None] - b_g[None, :])
++        else:
++            b_A_head = b_A
++        b_A_head = tl.where(m_A, b_A_head, 0)
++        v_head = v + (bos * H + value_head) * V
++        o_head = o + (bos * H + value_head) * V
++        p_v = tl.make_block_ptr(
++            v_head, (T, V), (H * V, 1), (i_t * BT, 0), (BT, V), (1, 0)
++        )
++        p_o = tl.make_block_ptr(
++            o_head, (T, V), (H * V, 1), (i_t * BT, 0), (BT, V), (1, 0)
++        )
++        b_v = tl.load(p_v, boundary_check=(0, 1))
++        b_out = b_o * scale + tl.dot(b_A_head.to(b_v.dtype), b_v) * scale
++        tl.store(p_o, b_out.to(p_o.dtype.element_ty), boundary_check=(0, 1))
++
++
+ def chunk_fwd_o(
+     q: torch.Tensor,
+     k: torch.Tensor,
+@@ -170,6 +317,36 @@
+     else:
+         o = torch.empty_like(v)
+ 
++    use_share_qk3 = (
++        os.getenv("VLLM_XIANDAO_GDN_CHUNK_O_SHARE_QK3", "1").lower()
++        in ("1", "true", "yes", "on")
++        and H == 48
++        and Hg == 16
++        and K == 128
++        and V == 128
++        and BT == 64
++        and q.dtype == torch.bfloat16
++    )
++    if use_share_qk3:
++        chunk_fwd_kernel_o_share_qk3[(NT, B * Hg)](
++            q,
++            k,
++            v,
++            h,
++            g,
++            o,
++            cu_seqlens,
++            chunk_indices,
++            scale,
++            T=T,
++            H=H,
++            Hg=Hg,
++            K=K,
++            V=V,
++            BT=BT,
++        )
++        return o
++
+     def grid(meta):
+         return (triton.cdiv(V, meta["BV"]), NT, B * H)
+ 
+diff -ruN -x __pycache__ -x '*.pyc' a/vllm/model_executor/layers/fla/ops/solve_tril.py b/vllm/model_executor/layers/fla/ops/solve_tril.py
+--- a/vllm/model_executor/layers/fla/ops/solve_tril.py	2026-08-26 10:27:50.000000000 +0000
++++ b/vllm/model_executor/layers/fla/ops/solve_tril.py	2026-10-08 02:37:27.000000000 +0000
+@@ -192,6 +192,9 @@
+         p_Ai_11 = tl.make_block_ptr(
+             Ai, (T, BT), (H * BT, 1), (i_t * BT, 0), (16, 16), (1, 0)
+         )
++        p_Ai_12 = tl.make_block_ptr(
++            Ai, (T, BT), (H * BT, 1), (i_t * BT, 16), (16, 16), (1, 0)
++        )
+         p_Ai_21 = tl.make_block_ptr(
+             Ai, (T, BT), (H * BT, 1), (i_t * BT + 16, 0), (16, 16), (1, 0)
+         )
+@@ -213,11 +216,20 @@
+             b_Ai_21.to(p_Ai_21.dtype.element_ty, fp_downcast_rounding="rtne"),
+             boundary_check=(0, 1),
+         )
++        tl.store(
++            p_Ai_12,
++            tl.zeros([16, 16], dtype=tl.float32).to(p_Ai_12.dtype.element_ty),
++            boundary_check=(0, 1),
++        )
+     else:
+         desc_o.store(
+             [i_t * BT + 0, 0], b_Ai_11.to(desc_o.dtype, fp_downcast_rounding="rtne")
+         )
+         desc_o.store(
++            [i_t * BT + 0, 16],
++            tl.zeros([16, 16], dtype=tl.float32).to(desc_o.dtype),
++        )
++        desc_o.store(
+             [i_t * BT + 16, 0], b_Ai_21.to(desc_o.dtype, fp_downcast_rounding="rtne")
+         )
+         desc_o.store(
+@@ -393,12 +405,30 @@
+         p_Ai_11 = tl.make_block_ptr(
+             Ai, (T, BT), (H * BT, 1), (i_t * BT, 0), (16, 16), (1, 0)
+         )
++        p_Ai_12 = tl.make_block_ptr(
++            Ai, (T, BT), (H * BT, 1), (i_t * BT, 16), (16, 16), (1, 0)
++        )
++        p_Ai_13 = tl.make_block_ptr(
++            Ai, (T, BT), (H * BT, 1), (i_t * BT, 32), (16, 16), (1, 0)
++        )
++        p_Ai_14 = tl.make_block_ptr(
++            Ai, (T, BT), (H * BT, 1), (i_t * BT, 48), (16, 16), (1, 0)
++        )
+         p_Ai_22 = tl.make_block_ptr(
+             Ai, (T, BT), (H * BT, 1), (i_t * BT + 16, 16), (16, 16), (1, 0)
+         )
++        p_Ai_23 = tl.make_block_ptr(
++            Ai, (T, BT), (H * BT, 1), (i_t * BT + 16, 32), (16, 16), (1, 0)
++        )
++        p_Ai_24 = tl.make_block_ptr(
++            Ai, (T, BT), (H * BT, 1), (i_t * BT + 16, 48), (16, 16), (1, 0)
++        )
+         p_Ai_33 = tl.make_block_ptr(
+             Ai, (T, BT), (H * BT, 1), (i_t * BT + 32, 32), (16, 16), (1, 0)
+         )
++        p_Ai_34 = tl.make_block_ptr(
++            Ai, (T, BT), (H * BT, 1), (i_t * BT + 32, 48), (16, 16), (1, 0)
++        )
+         p_Ai_44 = tl.make_block_ptr(
+             Ai, (T, BT), (H * BT, 1), (i_t * BT + 48, 48), (16, 16), (1, 0)
+         )
+@@ -470,16 +500,54 @@
+             b_Ai_43.to(p_Ai_43.dtype.element_ty, fp_downcast_rounding="rtne"),
+             boundary_check=(0, 1),
+         )
++        b_zero = tl.zeros([16, 16], dtype=tl.float32)
++        tl.store(
++            p_Ai_12,
++            b_zero.to(p_Ai_12.dtype.element_ty),
++            boundary_check=(0, 1),
++        )
++        tl.store(
++            p_Ai_13,
++            b_zero.to(p_Ai_13.dtype.element_ty),
++            boundary_check=(0, 1),
++        )
++        tl.store(
++            p_Ai_14,
++            b_zero.to(p_Ai_14.dtype.element_ty),
++            boundary_check=(0, 1),
++        )
++        tl.store(
++            p_Ai_23,
++            b_zero.to(p_Ai_23.dtype.element_ty),
++            boundary_check=(0, 1),
++        )
++        tl.store(
++            p_Ai_24,
++            b_zero.to(p_Ai_24.dtype.element_ty),
++            boundary_check=(0, 1),
++        )
++        tl.store(
++            p_Ai_34,
++            b_zero.to(p_Ai_34.dtype.element_ty),
++            boundary_check=(0, 1),
++        )
+     else:
++        b_zero = tl.zeros([16, 16], dtype=tl.float32).to(desc_o.dtype)
+         desc_o.store(
+             [i_t * BT + 0, 0], b_Ai_11.to(desc_o.dtype, fp_downcast_rounding="rtne")
+         )
++        desc_o.store([i_t * BT + 0, 16], b_zero)
++        desc_o.store([i_t * BT + 0, 32], b_zero)
++        desc_o.store([i_t * BT + 0, 48], b_zero)
+         desc_o.store(
+             [i_t * BT + 16, 16], b_Ai_22.to(desc_o.dtype, fp_downcast_rounding="rtne")
+         )
++        desc_o.store([i_t * BT + 16, 32], b_zero)
++        desc_o.store([i_t * BT + 16, 48], b_zero)
+         desc_o.store(
+             [i_t * BT + 32, 32], b_Ai_33.to(desc_o.dtype, fp_downcast_rounding="rtne")
+         )
++        desc_o.store([i_t * BT + 32, 48], b_zero)
+         desc_o.store(
+             [i_t * BT + 48, 48], b_Ai_44.to(desc_o.dtype, fp_downcast_rounding="rtne")
+         )
+@@ -536,7 +604,7 @@
+         chunk_indices = prepare_chunk_indices(cu_seqlens, BT)
+     NT = len(chunk_indices) if cu_seqlens is not None else triton.cdiv(T, BT)
+ 
+-    Ai = torch.zeros_like(A, dtype=output_dtype)
++    Ai = torch.empty_like(A, dtype=output_dtype)
+     if BT == 16:
+         merge_fn = solve_tril_16x16_kernel
+     elif BT == 32:
+diff -ruN -x __pycache__ -x '*.pyc' a/vllm/model_executor/layers/utils.py b/vllm/model_executor/layers/utils.py
+--- a/vllm/model_executor/layers/utils.py	2026-08-26 10:28:49.000000000 +0000
++++ b/vllm/model_executor/layers/utils.py	2026-10-08 02:37:27.000000000 +0000
+@@ -2,7 +2,9 @@
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ """Utility methods for model layers."""
+ 
++import os
+ from collections.abc import Callable
++from functools import lru_cache
+ 
+ import torch
+ 
+@@ -15,6 +17,224 @@
+ from vllm.utils.torch_utils import direct_register_custom_op
+ 
+ logger = init_logger(__name__)
++_LLMM1_DOWN_GEMM_SELFTEST_OK: bool | None = None
++_GFX936_TORCH_N1_DEFAULT_SHAPES = frozenset(
++    {
++        (1024, 5120),  # GDN BA projection: custom-op overhead exceeds kernel win
++        (4096, 5120),  # GDN Q/K projection
++        (5120, 6144),  # attention/GDN output projection
++        (16480, 5120),  # combined GDN projection: rocBLAS beats skinny kernels
++    }
++)
++_GFX936_WVSPLITK_N1_DEFAULT_SHAPES = frozenset(
++    {
++        (6144, 5120),  # GDN V projection
++        (10240, 5120),  # GDN conv projection
++        (14336, 5120),  # full attention QKV/gate projection
++        (16480, 5120),  # combined GDN q/k/v/z/b/a projection
++        (17408, 5120),  # half MLP gate/up projection
++        (34816, 5120),  # full MLP gate/up projection
++    }
++)
++
++
++def _xiandao_gfx936_skinny_gemm_enabled() -> bool:
++    return os.getenv("VLLM_XIANDAO_GFX936_SKINNY_GEMM", "1").lower() in (
++        "1",
++        "true",
++    )
++
++
++def _xiandao_gfx936_llmm1_down_gemm_enabled() -> bool:
++    return os.getenv("VLLM_XIANDAO_GFX936_LLMM1_DOWN_GEMM", "0").lower() in (
++        "1",
++        "true",
++    )
++
++
++def _xiandao_gfx936_wvsplitk_gemm_enabled() -> bool:
++    return os.getenv("VLLM_XIANDAO_GFX936_WVSPLITK_GEMM", "1").lower() in (
++        "1",
++        "true",
++    )
++
++
++def _xiandao_gfx936_wvsplitk_n1_first_enabled() -> bool:
++    return os.getenv("VLLM_XIANDAO_GFX936_WVSPLITK_N1_FIRST", "1").lower() in (
++        "1",
++        "true",
++    )
++
++
++def _xiandao_gfx936_wvsplitk_wrapper_fast_enabled() -> bool:
++    return os.getenv("VLLM_XIANDAO_GFX936_WVSPLITK_WRAPPER_FAST", "1").lower() in (
++        "1",
++        "true",
++    )
++
++
++def _xiandao_gfx936_wvsplitk_qwen_n1_v2_enabled() -> bool:
++    return os.getenv("VLLM_XIANDAO_GFX936_WVSPLITK_QWEN_N1_V2", "0").lower() in (
++        "1",
++        "true",
++    )
++
++
++def _xiandao_gfx936_n1_torch_enabled() -> bool:
++    value = os.getenv("VLLM_XIANDAO_GFX936_N1_TORCH")
++    if value is None:
++        value = os.getenv("VLLM_XIANDAO_GFX936_LM_HEAD_TORCH", "1")
++    return value.lower() in (
++        "1",
++        "true",
++    )
++
++
++def _xiandao_gfx936_torch_shape_allowed(m: int, k: int) -> bool:
++    if not _xiandao_gfx936_n1_torch_enabled():
++        return False
++    return m >= 65536 or (m, k) in _GFX936_TORCH_N1_DEFAULT_SHAPES
++
++
++def _xiandao_gfx936_wvsplitk_shape_allowed(m: int, k: int) -> bool:
++    shapes_env = os.getenv("VLLM_XIANDAO_GFX936_WVSPLITK_N1_SHAPES")
++    if shapes_env is None or not shapes_env.strip():
++        return (m, k) in _GFX936_WVSPLITK_N1_DEFAULT_SHAPES
++
++    shapes = shapes_env.strip()
++    if shapes.lower() in ("*", "all"):
++        return True
++    if shapes.lower() in ("0", "false", "none"):
++        return False
++
++    if not shapes:
++        return True
++
++    current = f"{m}x{k}"
++    for item in shapes.replace(";", ",").replace("|", ",").replace(
++            "+", ",").split(","):
++        normalized = item.strip().lower().replace(" ", "").replace(":", "x")
++        if normalized == current:
++            return True
++    return False
++
++
++def _xiandao_gfx936_wvsplitk_qwen_shape_allowed(m: int, k: int) -> bool:
++    shapes_env = os.getenv("VLLM_XIANDAO_GFX936_WVSPLITK_QWEN_N1_SHAPES")
++    if shapes_env is None or not shapes_env.strip():
++        return _xiandao_gfx936_wvsplitk_shape_allowed(m, k)
++
++    shapes = shapes_env.strip()
++    if shapes.lower() in ("*", "all"):
++        return True
++    if shapes.lower() in ("0", "false", "none"):
++        return False
++
++    current = f"{m}x{k}"
++    for item in shapes.replace(";", ",").replace("|", ",").replace(
++            "+", ",").split(","):
++        normalized = item.strip().lower().replace(" ", "").replace(":", "x")
++        if normalized == current:
++            return True
++    return False
++
++
++@lru_cache(maxsize=None)
++def _has_rocm_custom_op(name: str) -> bool:
++    try:
++        getattr(torch.ops._rocm_C, name)
++        return True
++    except AttributeError:
++        return False
++
++
++def _has_rocm_skinny_gemm_ops() -> bool:
++    return _has_rocm_custom_op("wvSplitK") and _has_rocm_custom_op("LLMM1")
++
++
++def _has_rocm_qwen_n1_gemm_op() -> bool:
++    return _has_rocm_custom_op("wvSplitKQwenN1")
++
++
++def _has_rocm_skinny_reduce_counting_op() -> bool:
++    return _has_rocm_custom_op("wvSplitKrc")
++
++
++def _xiandao_wvsplitk_variant_from_env(m: int, k: int, n: int = 1) -> int:
++    raw = os.getenv("VLLM_XIANDAO_WVSPLITK_VARIANT_MAP", "")
++    for item in raw.replace(";", ",").replace("|", ",").replace(
++            "+", ",").split(","):
++        normalized = item.strip().lower().replace(" ", "").replace(":", "x")
++        if not normalized or "=" not in normalized:
++            continue
++        shape, variant = normalized.split("=", 1)
++        dims = shape.split("x")
++        if len(dims) not in (2, 3):
++            continue
++        try:
++            shape_m = int(dims[0])
++            shape_k = int(dims[1])
++            shape_n = int(dims[2]) if len(dims) == 3 else n
++            parsed_variant = int(variant)
++        except ValueError:
++            continue
++        if shape_m == m and shape_k == k and shape_n == n:
++            return parsed_variant
++    return int(os.getenv("VLLM_XIANDAO_WVSPLITK_QWEN_N1_VARIANT", "0"))
++
++
++def _xiandao_gfx936_try_wvsplitk_n1(
++    x: torch.Tensor,
++    weight: torch.Tensor,
++    bias: torch.Tensor | None,
++    n: int | None = None,
++    m: int | None = None,
++    k: int | None = None,
++) -> torch.Tensor | None:
++    if bias is not None:
++        return None
++
++    from vllm.platforms.rocm import on_gfx936
++
++    if not on_gfx936():
++        return None
++
++    n = x.numel() // x.size(-1) if n is None else n
++    m = weight.shape[0] if m is None else m
++    k = weight.shape[1] if k is None else k
++    if (
++        n != 1
++        or k > 8192
++        or m % 4 != 0
++        or not envs.VLLM_ROCM_USE_SKINNY_GEMM
++        or not _xiandao_gfx936_skinny_gemm_enabled()
++        or not _xiandao_gfx936_wvsplitk_gemm_enabled()
++        or not _xiandao_gfx936_wvsplitk_n1_first_enabled()
++        or not (_xiandao_gfx936_wvsplitk_shape_allowed(m, k)
++                or (_xiandao_gfx936_wvsplitk_qwen_n1_v2_enabled()
++                    and _xiandao_gfx936_wvsplitk_qwen_shape_allowed(m, k)))
++        or not _has_rocm_skinny_gemm_ops()
++        or x.dtype not in [torch.float16, torch.bfloat16]
++        or k % 8 != 0
++        or not weight.is_contiguous()
++    ):
++        return None
++
++    x_view = x.reshape(-1, x.size(-1))
++    if not x_view.is_contiguous():
++        return None
++    if (
++        _xiandao_gfx936_wvsplitk_qwen_n1_v2_enabled()
++        and _has_rocm_qwen_n1_gemm_op()
++        and k in (5120, 6144, 8192)
++        and _xiandao_gfx936_wvsplitk_qwen_shape_allowed(m, k)
++    ):
++        variant = _xiandao_wvsplitk_variant_from_env(m, k, n)
++        out = ops.wvSplitKQwenN1(weight, x_view, variant, num_compute_units())
++        return out.reshape(*x.shape[:-1], weight.shape[0])
++    out = ops.wvSplitK(weight, x_view, num_compute_units(), bias)
++    return out.reshape(*x.shape[:-1], weight.shape[0])
++
+ 
+ MOE_LAYER_ROUTER_GATE_SUFFIXES = {
+     "gate",
+@@ -122,14 +342,38 @@
+ def rocm_unquantized_gemm_impl(
+     x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor | None = None
+ ) -> torch.Tensor:
+-    from vllm.platforms.rocm import on_gfx1x, on_gfx9, on_gfx950
++    global _LLMM1_DOWN_GEMM_SELFTEST_OK
++    from vllm.platforms.rocm import on_gfx9, on_gfx936, on_gfx950
+ 
+     n = x.numel() // x.size(-1)
+     m = weight.shape[0]
+     k = weight.shape[1]
++    is_gfx936 = on_gfx936()
+ 
+-    cu_count = num_compute_units()
++    if (
++        is_gfx936
++        and n == 1
++        and _xiandao_gfx936_torch_shape_allowed(m, k)
++    ):
++        return torch.nn.functional.linear(x, weight, bias)
+ 
++    use_gfx9_skinny_path = on_gfx9() or (
++        is_gfx936 and _xiandao_gfx936_skinny_gemm_enabled()
++    )
++    use_skinny = (
++        envs.VLLM_ROCM_USE_SKINNY_GEMM
++        and use_gfx9_skinny_path
++        and _has_rocm_skinny_gemm_ops()
++        and x.dtype in [torch.float16, torch.bfloat16]
++        and k % 8 == 0
++    )
++
++    if use_skinny and is_gfx936:
++        fast_out = _xiandao_gfx936_try_wvsplitk_n1(x, weight, bias, n, m, k)
++        if fast_out is not None:
++            return fast_out
++
++    cu_count = num_compute_units()
+     # Next ^2 of n
+     N_p2 = 1 << (n - 1).bit_length()
+     # With 64 Ms per CU (each of 4 SIMDs working on a 16x16 tile),
+@@ -149,6 +393,7 @@
+     use_skinny_reduce_counting = (
+         envs.VLLM_ROCM_USE_SKINNY_GEMM
+         and on_gfx950()
++        and _has_rocm_skinny_reduce_counting_op()
+         and x.dtype in [torch.float16, torch.bfloat16]
+         and (
+             10 <= n <= 128
+@@ -159,7 +404,6 @@
+             and weight.is_contiguous()
+         )
+     )
+-
+     if use_skinny_reduce_counting:
+         return ops.wvSplitKrc(x, weight, cu_count, bias)
+ 
+@@ -168,28 +412,67 @@
+ 
+         return gemm_a16w16(x, weight, bias)
+ 
+-    use_skinny = (
+-        envs.VLLM_ROCM_USE_SKINNY_GEMM
+-        and (on_gfx9() or on_gfx1x())
+-        and x.dtype in [torch.float16, torch.bfloat16]
+-        and k % 8 == 0
+-    )
++    if use_skinny is not True:
++        return torch.nn.functional.linear(x, weight, bias)
+ 
+-    if use_skinny:
+-        x_view = x.reshape(-1, x.size(-1))
+-        if m > 8 and 0 < n <= 4:
+-            cu_count = num_compute_units()
++    x_view = x.reshape(-1, x.size(-1))
++    if m % 4 == 0 and n == 1 and bias is None:
++        rows_per_block = 4 if k <= 8192 else None
++        if (
++            is_gfx936
++            and _xiandao_gfx936_wvsplitk_gemm_enabled()
++            and _xiandao_gfx936_wvsplitk_n1_first_enabled()
++            and _xiandao_gfx936_wvsplitk_shape_allowed(m, k)
++            and rows_per_block is not None
++            and weight.is_contiguous()
++            and x_view.is_contiguous()
++        ):
+             out = ops.wvSplitK(weight, x_view, cu_count, bias)
+             return out.reshape(*x.shape[:-1], weight.shape[0])
+-        elif m % 4 == 0 and n == 1 and k <= 8192 and bias is None:
+-            out = ops.LLMM1(weight, x_view, 4)
++        if (
++            is_gfx936
++            and _xiandao_gfx936_llmm1_down_gemm_enabled()
++            and m == 5120
++            and k == 17408
++            and weight.is_contiguous()
++            and x_view.is_contiguous()
++        ):
++            candidate = ops.LLMM1(weight, x_view, 8)
++            if _LLMM1_DOWN_GEMM_SELFTEST_OK is None:
++                reference = torch.nn.functional.linear(x_view, weight, bias)
++                abs_err = (
++                    candidate.reshape_as(reference).float() - reference.float()
++                ).abs()
++                max_abs_err = abs_err.max()
++                mean_abs_err = abs_err.mean()
++                _LLMM1_DOWN_GEMM_SELFTEST_OK = bool(
++                    max_abs_err.item() <= 4.0 and mean_abs_err.item() <= 0.75
++                )
++                if not _LLMM1_DOWN_GEMM_SELFTEST_OK:
++                    logger.warning(
++                        "Disabling gfx936 LLMM1 down GEMM fast path after "
++                        "self-test failed: max_abs_err=%s, mean_abs_err=%s",
++                        max_abs_err.item(),
++                        mean_abs_err.item(),
++                    )
++                    return reference.reshape(*x.shape[:-1], weight.shape[0])
++            if _LLMM1_DOWN_GEMM_SELFTEST_OK:
++                return candidate.reshape(*x.shape[:-1], weight.shape[0])
++        if rows_per_block is not None:
++            out = ops.LLMM1(weight, x_view, rows_per_block)
+             return out.reshape(*x.shape[:-1], weight.shape[0])
+-
+-    if rocm_aiter_ops.is_tgemm_enabled():
+-        from aiter.tuned_gemm import tgemm
+-
+-        return tgemm.mm(x, weight, bias)
+-
++    if m > 8 and 0 < n <= 4 and (
++        not is_gfx936
++        or (
++            _xiandao_gfx936_wvsplitk_gemm_enabled()
++            and n == 1
++            and k <= 8192
++            and _xiandao_gfx936_wvsplitk_shape_allowed(m, k)
++        )
++    ):
++        cu_count = num_compute_units()
++        out = ops.wvSplitK(weight, x_view, cu_count, bias)
++        return out.reshape(*x.shape[:-1], weight.shape[0])
+     return torch.nn.functional.linear(x, weight, bias)
+ 
+ 
+@@ -205,6 +488,18 @@
+     weight: torch.Tensor,
+     bias: torch.Tensor | None = None,
+ ) -> torch.Tensor:
++    from vllm.platforms.rocm import on_gfx936
++
++    if on_gfx936():
++        n = x.numel() // x.size(-1)
++        m = weight.shape[0]
++        k = weight.shape[1]
++        if n == 1 and _xiandao_gfx936_torch_shape_allowed(m, k):
++            return torch.nn.functional.linear(x, weight, bias)
++    if _xiandao_gfx936_wvsplitk_wrapper_fast_enabled():
++        fast_out = _xiandao_gfx936_try_wvsplitk_n1(x, weight, bias)
++        if fast_out is not None:
++            return fast_out
+     return torch.ops.vllm.rocm_unquantized_gemm(x, weight, bias)
+ 
+ 
+@@ -304,6 +599,7 @@
+     return layer.cpu_linear(x, weight, bias)
+ 
+ 
++@lru_cache(maxsize=None)
+ def dispatch_unquantized_gemm() -> Callable[..., torch.Tensor]:
+     if current_platform.is_rocm():
+         # return rocm_unquantized_gemm
+diff -ruN -x __pycache__ -x '*.pyc' a/vllm/platforms/rocm.py b/vllm/platforms/rocm.py
+--- a/vllm/platforms/rocm.py	2026-08-26 10:27:50.000000000 +0000
++++ b/vllm/platforms/rocm.py	2026-10-08 02:37:27.000000000 +0000
+@@ -2,6 +2,7 @@
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ 
+ import os
++import sys
+ from datetime import timedelta
+ from functools import cache, lru_cache, wraps
+ from typing import TYPE_CHECKING
+@@ -189,6 +190,7 @@
+ _ON_MI3XX = any(arch in _GCN_ARCH for arch in ["gfx942", "gfx950"])
+ _ON_GFX9 = any(arch in _GCN_ARCH for arch in ["gfx90a", "gfx942", "gfx950"])
+ _ON_GFX90A = "gfx90a" in _GCN_ARCH
++_ON_GFX936 = "gfx936" in _GCN_ARCH
+ _ON_GFX942 = "gfx942" in _GCN_ARCH
+ _ON_GFX950 = "gfx950" in _GCN_ARCH
+ 
+@@ -280,112 +282,72 @@
+     return _ON_GFX9
+ 
+ 
+-def on_gfx90a() -> bool:
+-    return _ON_GFX90A
++    backends = [
++        AttentionBackendEnum.ROCM_ATTN,
++    ]
++    use_contest_qwen35_aiter = _contest_qwen35_runtime_default()
++    use_aiter = (
++        envs.VLLM_ROCM_USE_AITER
++        or _env_truthy("VLLM_ROCM_USE_AITER")
++        or use_contest_qwen35_aiter
++    )
++    use_aiter_mha = use_aiter and (
++        envs.VLLM_ROCM_USE_AITER_MHA or _env_truthy("VLLM_ROCM_USE_AITER_MHA")
++    )
++    use_aiter_unified = use_aiter and (
++        envs.VLLM_ROCM_USE_AITER_UNIFIED_ATTENTION
++        or _env_truthy("VLLM_ROCM_USE_AITER_UNIFIED_ATTENTION")
++        or use_contest_qwen35_aiter
++    )
++    force_xiandao_unified = (
++        use_aiter_unified
++        and _env_truthy("VLLM_XIANDAO_FORCE_AITER_UNIFIED_BACKEND")
++    )
+ 
++    if force_xiandao_unified:
++        backends.append(AttentionBackendEnum.ROCM_AITER_UNIFIED_ATTN)
+ 
+-def on_gfx942() -> bool:
+-    return _ON_GFX942
++    # Priority 1: AITER MHA (Flash Attention) when requested.
++    # The contest Qwen3.5 path uses this for full-attention prefill and keeps
++    # Unified Attention later in the list as a selection-time fallback.
++    if use_aiter_mha and not force_xiandao_unified:
++        backends.append(AttentionBackendEnum.ROCM_AITER_FA)
++    elif rocm_aiter_ops.is_mha_enabled():
++        backends.append(AttentionBackendEnum.ROCM_AITER_FA)
+ 
++    # Priority 2: AITER Unified Attention.
++    if use_aiter_unified and not force_xiandao_unified:
++        backends.append(AttentionBackendEnum.ROCM_AITER_UNIFIED_ATTN)
++    elif is_aiter_found_and_supported():
++        backends.append(AttentionBackendEnum.ROCM_AITER_UNIFIED_ATTN)
+ 
+-def on_gfx950() -> bool:
+-    return _ON_GFX950
+-
+-
+-@cache
+-def use_rocm_custom_paged_attention(
+-    qtype: torch.dtype,
+-    head_size: int,
+-    block_size: int,
+-    gqa_ratio: int,
+-    max_seq_len: int,
+-    sliding_window: int,
+-    kv_cache_dtype: str,
+-    alibi_slopes: torch.Tensor | None = None,
+-    sinks: torch.Tensor | None = None,
+-) -> bool:
+-    # custom paged attn always supported on V0. On V1, requires sliding window
+-    # disabled due to observed numerical discrepancy.
+-    if _ON_GFX9:
+-        return (
+-            (sliding_window == 0 or sliding_window == (-1, -1))
+-            and (qtype == torch.half or qtype == torch.bfloat16)
+-            and (head_size == 64 or head_size == 128)
+-            and (block_size == 16 or block_size == 32)
+-            and (gqa_ratio >= 1 and gqa_ratio <= 16)
+-            and max_seq_len <= 128 * 1024
+-            and sinks is None
+-        )
+-
+-    else:
+-        return (
+-            _ON_GFX1X
+-            and (sliding_window == 0 or sliding_window == (-1, -1))
+-            and (qtype == torch.half or qtype == torch.bfloat16)
+-            and head_size == 128
+-            and block_size == 16
+-            and (gqa_ratio >= 3 and gqa_ratio <= 16)
+-            and max_seq_len <= 128 * 1024
+-            and alibi_slopes is None
+-            and kv_cache_dtype == "auto"
+-            and sinks is None
+-        )
++    # Priority 3: ROCM_ATTN (prefill-decode split)
++    from vllm.config import get_current_vllm_config_or_none
+ 
++    vllm_config = get_current_vllm_config_or_none()
++    if (
++        vllm_config is not None
++        and vllm_config.attention_config.use_prefill_decode_attention
++    ):
++        backends.append(AttentionBackendEnum.ROCM_ATTN)
+ 
+-@cache
+-def flash_attn_triton_available() -> bool:
+-    if not on_gfx1x():
+-        return False
+-    try:
+-        from importlib.util import find_spec
++    backends.append(AttentionBackendEnum.TRITON_ATTN)
++    backends.append(AttentionBackendEnum.TURBOQUANT)
+ 
+-        if find_spec("flash_attn") is None:
+-            return False
+-        if find_spec("flash_attn.flash_attn_triton_amd") is None:
+-            return False
+-        if os.environ.get("FLASH_ATTENTION_TRITON_AMD_ENABLE") != "TRUE":
+-            logger.info_once(
+-                "Set FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE to enable "
+-                "Flash Attention Triton backend on RDNA."
+-            )
+-            return False
+-        return True
+-    except ImportError:
+-        return False
++    return backends
+ 
+ 
+-def _get_backend_priorities(
+-    use_mla: bool,
+-    use_sparse: bool,
+-) -> list[AttentionBackendEnum]:
+-    from vllm._aiter_ops import is_aiter_found_and_supported, rocm_aiter_ops
+-
+-    if use_sparse:
+-        return [AttentionBackendEnum.ROCM_AITER_MLA_SPARSE]
+-
+-    if use_mla:
+-        if rocm_aiter_ops.is_mla_enabled():
+-            return [
+-                AttentionBackendEnum.ROCM_AITER_MLA,
+-                AttentionBackendEnum.TRITON_MLA,
+-                AttentionBackendEnum.ROCM_AITER_TRITON_MLA,
+-            ]
+-        else:
+-            return [
+-                AttentionBackendEnum.TRITON_MLA,
+-            ]
++def _env_truthy(name: str) -> bool:
++    return os.getenv(name, "").strip().lower() in ("1", "true")
+ 
+-    backends = [
+-        AttentionBackendEnum.ROCM_ATTN,
+-    ]
+-    if rocm_aiter_ops.is_mha_enabled():
+-        backends.append(AttentionBackendEnum.ROCM_AITER_FA)
+-    if is_aiter_found_and_supported():
+-        backends.append(AttentionBackendEnum.ROCM_AITER_UNIFIED_ATTN)
+-    backends.append(AttentionBackendEnum.TRITON_ATTN)
+-    backends.append(AttentionBackendEnum.TURBOQUANT)
+ 
+-    return backends
++def _contest_qwen35_runtime_default() -> bool:
++    identifiers = [
++        os.getenv("MODEL_DIR", ""),
++        os.getenv("VLLM_MODEL", ""),
++        *sys.argv,
++    ]
++    return any("qwen3.5-27b" in value.lower() for value in identifiers)
+ 
+ 
+ class RocmPlatform(Platform):
+@@ -747,6 +709,44 @@
+                 )
+                 compilation_config.cudagraph_mode = CUDAGraphMode.PIECEWISE
+ 
++        if cache_config and not cache_config.user_specified_block_size:
++            from vllm._aiter_ops import rocm_aiter_ops
++
++            if (
++                rocm_aiter_ops.is_triton_unified_attn_enabled()
++                or (
++                    (
++                        _env_truthy("VLLM_ROCM_USE_AITER")
++                        or _contest_qwen35_runtime_default()
++                    )
++                    and (
++                        _env_truthy("VLLM_ROCM_USE_AITER_UNIFIED_ATTENTION")
++                        or _contest_qwen35_runtime_default()
++                    )
++                )
++                # NOTE: This block has been deprecated
++                # or get_env_variable_attn_backend()
++                # == AttentionBackendEnum.ROCM_AITER_UNIFIED_ATTN
++                # TODO: monitor https://github.com/vllm-project/vllm/pull/30396
++                # to see how we can transition to the new way of selecting
++                # attention backends
++            ):
++                model_config = vllm_config.model_config
++                if model_config is not None and model_config.is_hybrid:
++                    if cache_config.block_size is None:
++                        cache_config.block_size = 16
++                    logger.warning_once(
++                        "[ROCM_AITER_UNIFIED_ATTN]: Preserving hybrid model "
++                        "kv cache block size for page-size alignment."
++                    )
++                else:
++                    cache_config.block_size = 64
++                    logger.warning(
++                        "[ROCM_AITER_UNIFIED_ATTN]: Setting kv cache block size to 64."
++                    )
++            else:
++                cache_config.block_size = 16
++
+         if parallel_config.worker_cls == "auto":
+             parallel_config.worker_cls = "vllm.v1.worker.gpu_worker.Worker"
+ 
+diff -ruN -x __pycache__ -x '*.pyc' a/vllm/v1/attention/backends/rocm_aiter_unified_attn.py b/vllm/v1/attention/backends/rocm_aiter_unified_attn.py
+--- a/vllm/v1/attention/backends/rocm_aiter_unified_attn.py	2026-08-26 10:27:51.000000000 +0000
++++ b/vllm/v1/attention/backends/rocm_aiter_unified_attn.py	2026-10-08 02:37:27.000000000 +0000
+@@ -51,7 +51,7 @@
+ 
+     @classmethod
+     def supports_sink(cls) -> bool:
+-        return True
++        return False
+ 
+     @classmethod
+     def supports_non_causal(cls) -> bool:
+@@ -132,7 +132,9 @@
+         logger.info_once(
+             "Using aiter unified attention for RocmAiterUnifiedAttentionImpl"
+         )
+-        from aiter.ops.triton.unified_attention import unified_attention
++        from vllm.v1.attention.ops.triton_unified_attention import (
++            unified_attention,
++        )
+ 
+         self.unified_attention = unified_attention
+         self.supports_quant_query_input = True
+diff -ruN -x __pycache__ -x '*.pyc' a/vllm/v1/attention/ops/xiandao_aiter_unified_attention.py b/vllm/v1/attention/ops/xiandao_aiter_unified_attention.py
+--- a/vllm/v1/attention/ops/xiandao_aiter_unified_attention.py	1970-01-01 00:00:00.000000000 +0000
++++ b/vllm/v1/attention/ops/xiandao_aiter_unified_attention.py	2026-10-08 02:37:27.000000000 +0000
+@@ -0,0 +1,792 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++
++# Authors:
++#  - Burkhard Ringlein <ngl@zurich.ibm.com>
++#  - Jan van Lunteren <jvl@zurich.ibm.com>
++#  - Chih-Chieh Yang <chih.chieh.yang@ibm.com>
++#  - Thomas Parnell <tpa@zurich.ibm.com>
++
++import functools
++import os
++
++import torch
++import triton
++import triton.language as tl
++
++
++def _xiandao_decode_segments() -> int:
++    try:
++        segments = int(os.getenv("VLLM_XIANDAO_AITER_DECODE_SEGMENTS", "32"))
++    except ValueError:
++        segments = 32
++    if segments < 1:
++        return 16
++    return segments
++
++
++@triton.jit
++def cdiv_fn(x, y):
++    return (x + y - 1) // y
++
++
++@triton.jit
++def apply_softcap(S, x):
++    Sdiv = S / x
++    p1 = tl.exp(Sdiv)
++    p2 = tl.exp(-Sdiv)
++    return x * (p1 - p2) / (p1 + p2)
++
++
++@triton.jit
++def find_seq_idx(query_start_len_ptr, target_idx, num_seqs,
++                 BLOCK_Q: tl.constexpr, use_q_block_mode: tl.constexpr):
++    left: tl.int32 = 0
++    right = num_seqs
++    while left < right:
++        mid = (left + right) // 2
++        val = tl.load(query_start_len_ptr + mid)
++        mid_val = val // BLOCK_Q + mid if use_q_block_mode else val
++
++        if mid_val <= target_idx:
++            left = mid + 1
++        else:
++            right = mid
++
++    return left - 1
++
++
++@triton.jit
++def kernel_unified_attention_2d(
++        output_ptr,  # [num_tokens, num_query_heads, head_size]
++        query_ptr,  # [num_tokens, num_query_heads, head_size]
++        key_cache_ptr,  # [num_blks, blk_size, num_kv_heads, head_size]
++        value_cache_ptr,  # [num_blks, blk_size, num_kv_heads, head_size]
++        block_tables_ptr,  # [num_seqs, max_num_blocks_per_seq]
++        seq_lens_ptr,  # [num_seqs]
++        alibi_slopes_ptr,  # [num_query_heads]
++        scale,  # float32
++        k_scale,  # float32
++        v_scale,  # float32
++        softcap,  # float32
++        num_query_heads: tl.constexpr,  # int
++        num_queries_per_kv: tl.constexpr,  # int
++        block_table_stride: tl.int64,  # int
++        query_stride_0: tl.int64,  # int
++        query_stride_1: tl.int64,  # int, should be equal to head_size
++        output_stride_0: tl.int64,  # int
++        output_stride_1: tl.int64,  # int, should be equal to head_size
++        BLOCK_SIZE: tl.constexpr,  # int
++        CACHE_BLOCK_SIZE: tl.constexpr,
++        HEAD_SIZE: tl.constexpr,  # int
++        HEAD_SIZE_PADDED: tl.constexpr,  # int, must be power of 2
++        USE_ALIBI_SLOPES: tl.constexpr,  # bool
++        USE_SOFTCAP: tl.constexpr,  # bool
++        SLIDING_WINDOW: tl.constexpr,  # int
++        stride_k_cache_0: tl.int64,  # int
++        stride_k_cache_1: tl.int64,  # int
++        stride_k_cache_2: tl.int64,  # int
++        stride_k_cache_3: tl.constexpr,  # int
++        stride_v_cache_0: tl.int64,  # int
++        stride_v_cache_1: tl.int64,  # int
++        stride_v_cache_2: tl.int64,  # int
++        stride_v_cache_3: tl.constexpr,  # int
++        query_start_len_ptr,  # [num_seqs+1]
++        BLOCK_Q: tl.constexpr,  # int
++        num_seqs: tl.int32,
++        BLOCK_M: tl.constexpr,  # int
++):
++    tl.static_assert(CACHE_BLOCK_SIZE % BLOCK_SIZE == 0, "CACHE_BLOCK_SIZE must be divisible by BLOCK_SIZE")
++
++    q_block_global_idx = tl.program_id(0)
++    kv_head_idx = tl.program_id(1)
++
++    seq_idx = find_seq_idx(query_start_len_ptr, q_block_global_idx, num_seqs,
++                           BLOCK_Q, True)
++
++    q_block_start_idx = tl.load(query_start_len_ptr +
++                                seq_idx) // BLOCK_Q + seq_idx
++
++    q_block_local_idx = q_block_global_idx - q_block_start_idx
++
++    cur_batch_in_all_start_index = tl.load(query_start_len_ptr + seq_idx)
++    cur_batch_in_all_stop_index = tl.load(query_start_len_ptr + seq_idx + 1)
++
++    cur_batch_query_len = cur_batch_in_all_stop_index \
++        - cur_batch_in_all_start_index
++
++    if q_block_local_idx * BLOCK_Q >= cur_batch_query_len:
++        return
++
++    offs_m = tl.arange(0, BLOCK_M)
++    offs_d = tl.arange(0, HEAD_SIZE_PADDED)
++    query_pos = q_block_local_idx * BLOCK_Q + offs_m // num_queries_per_kv
++
++    query_offset_0 = cur_batch_in_all_start_index + query_pos
++    query_offset_1 = kv_head_idx * num_queries_per_kv + \
++        offs_m % num_queries_per_kv
++    query_offset = (query_offset_0[:, None] * query_stride_0 +
++                    query_offset_1[:, None] * query_stride_1 + offs_d[None, :])
++
++    dim_mask = tl.where(offs_d < HEAD_SIZE, 1, 0).to(tl.int1)
++    query_mask_0 = tl.where(query_pos < cur_batch_query_len, 1, 0).to(tl.int1)
++    query_mask_1 = tl.where(query_offset_1 < num_query_heads, 1, 0).to(tl.int1)
++
++    # Q : (BLOCK_M, HEAD_SIZE_PADDED)
++    Q = tl.load(
++        query_ptr + query_offset,
++        mask=dim_mask[None, :] & query_mask_0[:, None] & query_mask_1[:, None],
++        other=0.0,
++    )
++
++    block_table_offset = seq_idx * block_table_stride
++
++    M = tl.full([BLOCK_M], float("-inf"), dtype=tl.float32)
++    L = tl.full([BLOCK_M], 1.0, dtype=tl.float32)
++    acc = tl.zeros([BLOCK_M, HEAD_SIZE_PADDED], dtype=tl.float32)
++
++    # sequence len for this particular sequence
++    seq_len = tl.load(seq_lens_ptr + seq_idx)
++
++    # context length for this particular sequences
++    context_len = seq_len - cur_batch_query_len
++
++    # alibi slope for this head
++    if USE_ALIBI_SLOPES:
++        alibi_slope = tl.load(alibi_slopes_ptr + query_offset_1,
++                              mask=query_mask_1,
++                              other=0.0)
++
++    num_blocks = cdiv_fn(seq_len, BLOCK_SIZE)
++    # iterate through tiles
++    for j in range(0, num_blocks):
++        offs_n = tl.arange(0, BLOCK_SIZE)
++        if BLOCK_SIZE == CACHE_BLOCK_SIZE:
++            physical_block_idx = tl.load(block_tables_ptr + block_table_offset + j)
++            v_offset = (physical_block_idx * stride_v_cache_0 +
++                        kv_head_idx * stride_v_cache_2 +
++                        offs_d[None, :] * stride_v_cache_3 +
++                        offs_n[:, None] * stride_v_cache_1)
++
++            k_offset = (physical_block_idx * stride_k_cache_0 +
++                        kv_head_idx * stride_k_cache_2 +
++                        offs_d[:, None] * stride_k_cache_3 +
++                        offs_n[None, :] * stride_k_cache_1)
++        else:
++            start_n = j * BLOCK_SIZE
++            physical_block_idx = tl.load(block_tables_ptr + block_table_offset + start_n // CACHE_BLOCK_SIZE)
++            v_offset = (physical_block_idx * stride_v_cache_0 +
++                        kv_head_idx * stride_v_cache_2 +
++                        offs_d[None, :] * stride_v_cache_3 +
++                        ((start_n + offs_n[:, None]) % CACHE_BLOCK_SIZE) * stride_v_cache_1)
++
++            k_offset = (physical_block_idx * stride_k_cache_0 +
++                        kv_head_idx * stride_k_cache_2 +
++                        offs_d[:, None] * stride_k_cache_3 +
++                        ((start_n + offs_n[None, :]) % CACHE_BLOCK_SIZE) * stride_k_cache_1)
++        # K : (HEAD_SIZE, BLOCK_SIZE)
++        K_load = tl.load(key_cache_ptr + k_offset,
++                        mask=dim_mask[:, None],
++                        other=0.0)
++
++        if K_load.dtype.is_fp8():
++            if Q.dtype.is_fp8():
++                K = K_load
++            else:
++                K = (K_load.to(tl.float32) * tl.load(k_scale)).to(Q.dtype)
++        else:
++            K = K_load
++
++        # V : (BLOCK_SIZE, HEAD_SIZE)
++        V_load = tl.load(value_cache_ptr + v_offset,
++                         mask=dim_mask[None, :],
++                         other=0.0)
++
++        if V_load.dtype.is_fp8():
++            if Q.dtype.is_fp8():
++                V = V_load
++            else:
++                V = (V_load.to(tl.float32) * tl.load(v_scale)).to(Q.dtype)
++        else:
++            V = V_load
++
++        seq_offset = j * BLOCK_SIZE + offs_n
++
++        seq_mask = seq_offset[None, :] < context_len + query_pos[:, None] + 1
++
++        # S : (BLOCK_M, BLOCK_SIZE)
++        S = tl.zeros(shape=(BLOCK_M, BLOCK_SIZE), dtype=tl.float32)
++
++        S += scale * tl.dot(Q, K)
++
++        if USE_SOFTCAP:
++            S = apply_softcap(S, softcap)
++
++        S = tl.where(query_mask_1[:, None] & query_mask_0[:, None] & seq_mask,
++                     S, float("-inf"))
++
++        if SLIDING_WINDOW > 0:
++            S = tl.where((context_len + query_pos[:, None] - seq_offset)
++                         < SLIDING_WINDOW, S, float("-inf"))
++
++        if USE_ALIBI_SLOPES:
++            S += alibi_slope[:, None] * (seq_offset - context_len)
++
++        # compute running maximum
++        # m_j : (BLOCK_M,)
++        m_j = tl.maximum(M, tl.max(S, axis=1))
++        # For sliding window there's a chance the max is -inf due to masking of
++        # the entire row. In this case we need to set m_j 0 to avoid NaN
++        m_j = tl.where(m_j > float("-inf"), m_j, 0.0)
++
++        # P : (BLOCK_M, BLOCK_SIZE)
++        P = tl.exp(S - m_j[:, None])
++
++        # l_j : (BLOCK_M,)
++        l_j = tl.sum(P, axis=1)
++
++        # alpha : (BLOCK_M, )
++        alpha = tl.exp(M - m_j)
++
++        # acc : (BLOCK_M, HEAD_SIZE_PADDED)
++        acc = acc * alpha[:, None]
++
++        # update constants
++        L = L * alpha + l_j
++        M = m_j
++
++        # acc : (BLOCK_M, HEAD_SIZE_PADDED)
++        acc += tl.dot(P.to(V.dtype), V)
++
++    # epilogue
++    acc = acc / L[:, None]
++
++    output_offset = (query_offset_0[:, None] * output_stride_0 +
++                     query_offset_1[:, None] * output_stride_1 +
++                     offs_d[None, :])
++
++    tl.store(
++        output_ptr + output_offset,
++        acc,
++        mask=dim_mask[None, :] & query_mask_0[:, None] & query_mask_1[:, None],
++    )
++
++
++@triton.jit
++def kernel_unified_attention_3d(
++        segm_output_ptr,
++        # [num_tokens, num_query_heads, num_segments, head_size]
++        segm_max_ptr,  # [num_tokens, num_query_heads, num_segments]
++        segm_expsum_ptr,  # [num_tokens, num_query_heads, num_segments]
++        query_ptr,  # [num_tokens, num_query_heads, head_size]
++        key_cache_ptr,  # [num_blks, num_kv_heads, head_size // x, blk_size, x]
++        value_cache_ptr,  # [num_blks, num_kv_heads, head_size, blk_size]
++        block_tables_ptr,  # [num_seqs, max_num_blocks_per_seq]
++        seq_lens_ptr,  # [num_seqs]
++        alibi_slopes_ptr,  # [num_query_heads]
++        scale,  # float32
++        k_scale,  # float32
++        v_scale,  # float32
++        softcap,  # float32
++        num_query_heads: tl.constexpr,  # int
++        num_queries_per_kv: tl.constexpr,  # int
++        block_table_stride: tl.int64,  # int
++        query_stride_0: tl.int64,  # int
++        query_stride_1: tl.int64,  # int, should be equal to head_size
++        BLOCK_SIZE: tl.constexpr,  # int
++        CACHE_BLOCK_SIZE: tl.constexpr,  # int
++        HEAD_SIZE: tl.constexpr,  # int
++        HEAD_SIZE_PADDED: tl.constexpr,  # int, must be power of 2
++        USE_ALIBI_SLOPES: tl.constexpr,  # bool
++        USE_SOFTCAP: tl.constexpr,  # bool
++        SLIDING_WINDOW: tl.constexpr,  # int
++        stride_k_cache_0: tl.int64,  # int
++        stride_k_cache_1: tl.int64,  # int
++        stride_k_cache_2: tl.int64,  # int
++        stride_k_cache_3: tl.constexpr,  # int
++        stride_v_cache_0: tl.int64,  # int
++        stride_v_cache_1: tl.int64,  # int
++        stride_v_cache_2: tl.int64,  # int
++        stride_v_cache_3: tl.constexpr,  # int
++        query_start_len_ptr,  # [num_seqs+1]
++        BLOCK_Q: tl.constexpr,  # int
++        num_seqs: tl.int32,
++        BLOCK_M: tl.constexpr,  # int
++        NUM_SEGMENTS_PER_SEQ: tl.constexpr,  # int
++):
++    tl.static_assert(CACHE_BLOCK_SIZE % BLOCK_SIZE == 0, "CACHE_BLOCK_SIZE must be divisible by BLOCK_SIZE")
++
++    q_block_global_idx = tl.program_id(0)
++    kv_head_idx = tl.program_id(1)
++    segm_idx = tl.program_id(2)
++
++    seq_idx = find_seq_idx(query_start_len_ptr, q_block_global_idx, num_seqs,
++                           BLOCK_Q, True)
++
++    q_block_start_idx = tl.load(query_start_len_ptr +
++                                seq_idx) // BLOCK_Q + seq_idx
++
++    q_block_local_idx = q_block_global_idx - q_block_start_idx
++
++    cur_batch_in_all_start_index = tl.load(query_start_len_ptr + seq_idx)
++    cur_batch_in_all_stop_index = tl.load(query_start_len_ptr + seq_idx + 1)
++
++    cur_batch_query_len = cur_batch_in_all_stop_index \
++        - cur_batch_in_all_start_index
++
++    if q_block_local_idx * BLOCK_Q >= cur_batch_query_len:
++        return
++
++    # sequence len for this particular sequence
++    seq_len = tl.load(seq_lens_ptr + seq_idx)
++
++    # number of segments for this particular sequence
++    num_segments = NUM_SEGMENTS_PER_SEQ
++    blocks_per_segment = cdiv_fn(seq_len, num_segments * BLOCK_SIZE)
++
++    if segm_idx * blocks_per_segment * BLOCK_SIZE >= seq_len:
++        return
++
++    offs_m = tl.arange(0, BLOCK_M)
++    offs_d = tl.arange(0, HEAD_SIZE_PADDED)
++
++    query_pos = q_block_local_idx * BLOCK_Q + offs_m // num_queries_per_kv
++
++    query_offset_0 = cur_batch_in_all_start_index + query_pos
++    query_offset_1 = kv_head_idx * num_queries_per_kv + \
++        offs_m % num_queries_per_kv
++
++    query_offset = (query_offset_0[:, None] * query_stride_0 +
++                    query_offset_1[:, None] * query_stride_1 + offs_d[None, :])
++
++    dim_mask = tl.where(offs_d < HEAD_SIZE, 1, 0).to(tl.int1)
++    query_mask_0 = tl.where(query_pos < cur_batch_query_len, 1, 0).to(tl.int1)
++    query_mask_1 = tl.where(query_offset_1 < num_query_heads, 1, 0).to(tl.int1)
++
++    # Q : (BLOCK_M, HEAD_SIZE_PADDED)
++    Q = tl.load(
++        query_ptr + query_offset,
++        mask=dim_mask[None, :] & query_mask_0[:, None] & query_mask_1[:, None],
++        other=0.0,
++    )
++
++    block_table_offset = seq_idx * block_table_stride
++
++    M = tl.full([BLOCK_M], float("-inf"), dtype=tl.float32)
++    L = tl.full([BLOCK_M], 1.0, dtype=tl.float32)
++    acc = tl.zeros([BLOCK_M, HEAD_SIZE_PADDED], dtype=tl.float32)
++
++    # context length for this particular sequences
++    context_len = seq_len - cur_batch_query_len
++
++    # alibi slope for this head
++    if USE_ALIBI_SLOPES:
++        alibi_slope = tl.load(alibi_slopes_ptr + query_offset_1,
++                              mask=query_mask_1,
++                              other=0.0)
++
++    num_blocks = cdiv_fn(seq_len, BLOCK_SIZE)
++
++    # iterate through tiles within current segment
++    for j in range(
++            segm_idx * blocks_per_segment,
++            min((segm_idx + 1) * blocks_per_segment, num_blocks),
++    ):
++        offs_n = tl.arange(0, BLOCK_SIZE)
++
++        if BLOCK_SIZE == CACHE_BLOCK_SIZE:
++            physical_block_idx = tl.load(block_tables_ptr + block_table_offset + j)
++            v_offset = (physical_block_idx * stride_v_cache_0 +
++                        kv_head_idx * stride_v_cache_2 +
++                        offs_d[None, :] * stride_v_cache_3 +
++                        offs_n[:, None] * stride_v_cache_1)
++
++            k_offset = (physical_block_idx * stride_k_cache_0 +
++                        kv_head_idx * stride_k_cache_2 +
++                        offs_d[:, None] * stride_k_cache_3 +
++                        offs_n[None, :] * stride_k_cache_1)
++        else:
++            start_n = j * BLOCK_SIZE
++            physical_block_idx = tl.load(block_tables_ptr + block_table_offset + (start_n // CACHE_BLOCK_SIZE))
++            v_offset = (physical_block_idx * stride_v_cache_0 +
++                        kv_head_idx * stride_v_cache_2 +
++                        offs_d[None, :] * stride_v_cache_3 +
++                        ((start_n + offs_n[:, None]) % CACHE_BLOCK_SIZE) * stride_v_cache_1)
++
++            k_offset = (physical_block_idx * stride_k_cache_0 +
++                        kv_head_idx * stride_k_cache_2 +
++                        offs_d[:, None] * stride_k_cache_3 +
++                        ((start_n + offs_n[None, :]) % CACHE_BLOCK_SIZE) * stride_k_cache_1)
++
++        # K : (HEAD_SIZE, BLOCK_SIZE)
++        K_load = tl.load(key_cache_ptr + k_offset,
++                         mask=dim_mask[:, None],
++                         other=0.0)
++
++        if K_load.dtype.is_fp8():
++            if Q.dtype.is_fp8():
++                K = K_load
++            else:
++                K = (K_load.to(tl.float32) * tl.load(k_scale)).to(Q.dtype)
++        else:
++            K = K_load
++
++        # V : (BLOCK_SIZE, HEAD_SIZE)
++        V_load = tl.load(value_cache_ptr + v_offset,
++                         mask=dim_mask[None, :],
++                         other=0.0)
++
++        if V_load.dtype.is_fp8():
++            if Q.dtype.is_fp8():
++                V = V_load
++            else:
++                V = (V_load.to(tl.float32) * tl.load(v_scale)).to(Q.dtype)
++        else:
++            V = V_load
++
++        seq_offset = j * BLOCK_SIZE + offs_n
++
++        seq_mask = seq_offset[None, :] < context_len + query_pos[:, None] + 1
++
++        # S : (BLOCK_M, BLOCK_SIZE)
++        S = tl.zeros(shape=(BLOCK_M, BLOCK_SIZE), dtype=tl.float32)
++
++        S += scale * tl.dot(Q, K)
++
++        if USE_SOFTCAP:
++            S = apply_softcap(S, softcap)
++
++        S = tl.where(query_mask_1[:, None] & query_mask_0[:, None] & seq_mask,
++                     S, float("-inf"))
++
++        if SLIDING_WINDOW > 0:
++            S = tl.where((context_len + query_pos[:, None] - seq_offset)
++                         < SLIDING_WINDOW, S, float("-inf"))
++
++        if USE_ALIBI_SLOPES:
++            S += alibi_slope[:, None] * (seq_offset - context_len)
++
++        # compute running maximum
++        # m_j : (BLOCK_M,)
++        m_j = tl.maximum(M, tl.max(S, axis=1))
++        # For sliding window there's a chance the max is -inf due to masking of
++        # the entire row. In this case we need to set m_j 0 to avoid NaN
++        m_j = tl.where(m_j > float("-inf"), m_j, 0.0)
++
++        # P : (BLOCK_M, BLOCK_SIZE,)
++        P = tl.exp(S - m_j[:, None])
++
++        # l_j : (BLOCK_M,)
++        l_j = tl.sum(P, axis=1)
++
++        # alpha : (BLOCK_M, )
++        alpha = tl.exp(M - m_j)
++
++        # acc : (BLOCK_M, HEAD_SIZE_PADDED)
++        acc = acc * alpha[:, None]
++
++        # update constants
++        L = L * alpha + l_j
++        M = m_j
++
++        # acc : (BLOCK_M, HEAD_SIZE_PADDED)
++        acc += tl.dot(P.to(V.dtype), V)
++
++    segm_output_offset = (
++        query_offset_0[:, None].to(tl.int64) *
++        (num_query_heads * NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED) +
++        query_offset_1[:, None] * (NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED) +
++        segm_idx * HEAD_SIZE_PADDED + tl.arange(0, HEAD_SIZE_PADDED)[None, :])
++    tl.store(
++        segm_output_ptr + segm_output_offset,
++        acc,
++        mask=dim_mask[None, :] & query_mask_0[:, None] & query_mask_1[:, None],
++    )
++    segm_offset = (query_offset_0.to(tl.int64) *
++                   (num_query_heads * NUM_SEGMENTS_PER_SEQ) +
++                   query_offset_1 * NUM_SEGMENTS_PER_SEQ + segm_idx)
++    tl.store(segm_max_ptr + segm_offset, M, mask=query_mask_0 & query_mask_1)
++    tl.store(segm_expsum_ptr + segm_offset,
++             L,
++             mask=query_mask_0 & query_mask_1)
++
++
++@triton.jit
++def reduce_segments(
++        output_ptr,  # [num_tokens, num_query_heads, head_size]
++        segm_output_ptr,
++        #[num_tokens, num_query_heads, max_num_segments, head_size]
++        segm_max_ptr,  # [num_tokens, num_query_heads, max_num_segments]
++        segm_expsum_ptr,  # [num_tokens, num_query_heads, max_num_segments]
++        seq_lens_ptr,  # [num_seqs]
++        num_seqs,  # int
++        num_query_heads: tl.constexpr,  # int
++        output_stride_0: tl.int64,  # int
++        output_stride_1: tl.int64,  # int, should be equal to head_size
++        block_table_stride: tl.int64,  # int
++        BLOCK_SIZE: tl.constexpr,  # int
++        HEAD_SIZE: tl.constexpr,  # int, must be power of 2
++        HEAD_SIZE_PADDED: tl.constexpr,  # int, must be power of 2
++        query_start_len_ptr,  # [num_seqs+1]
++        BLOCK_Q: tl.constexpr,  # int
++        NUM_SEGMENTS_PER_SEQ: tl.constexpr,  # int
++):
++    query_token_idx = tl.program_id(0)
++    query_head_idx = tl.program_id(1)
++
++    seq_idx = find_seq_idx(query_start_len_ptr, query_token_idx, num_seqs,
++                           BLOCK_Q, False)
++
++    # sequence len for this particular sequence
++    seq_len = tl.load(seq_lens_ptr + seq_idx)
++
++    # number of segments for this particular sequence
++    num_segments = NUM_SEGMENTS_PER_SEQ
++    blocks_per_segment = cdiv_fn(seq_len, num_segments * BLOCK_SIZE)
++
++    # create masks for subsequent loads
++    act_num_segments = cdiv_fn(seq_len, blocks_per_segment * BLOCK_SIZE)
++    segm_mask = tl.arange(0, NUM_SEGMENTS_PER_SEQ) < tl.full(
++        [NUM_SEGMENTS_PER_SEQ], act_num_segments, dtype=tl.int32)
++    dim_mask = tl.where(tl.arange(0, HEAD_SIZE_PADDED) < HEAD_SIZE, 1,
++                        0).to(tl.int1)
++
++    # load segment maxima
++    segm_offset = (query_token_idx.to(tl.int64) *
++                   (num_query_heads * NUM_SEGMENTS_PER_SEQ) +
++                   query_head_idx * NUM_SEGMENTS_PER_SEQ +
++                   tl.arange(0, NUM_SEGMENTS_PER_SEQ))
++    segm_max = tl.load(segm_max_ptr + segm_offset,
++                       mask=segm_mask,
++                       other=float("-inf"))
++    overall_max = tl.max(segm_max)
++
++    # load and rescale segment exp sums
++    segm_expsum = tl.load(segm_expsum_ptr + segm_offset,
++                          mask=segm_mask,
++                          other=0.0)
++    segm_expsum = segm_expsum * tl.exp(segm_max - overall_max)
++    overall_expsum = tl.sum(segm_expsum)
++
++    # load, rescale, and add segment attention outputs
++    segm_output_offset = (
++        query_token_idx.to(tl.int64) *
++        (num_query_heads * NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED) +
++        query_head_idx * (NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED) +
++        tl.arange(0, NUM_SEGMENTS_PER_SEQ)[:, None] * HEAD_SIZE_PADDED +
++        tl.arange(0, HEAD_SIZE_PADDED)[None, :])
++    segm_output = tl.load(
++        segm_output_ptr + segm_output_offset,
++        mask=segm_mask[:, None] & dim_mask[None, :],
++        other=0.0,
++    )
++    segm_output *= tl.exp(segm_max - overall_max)[:, None]
++    acc_sum = tl.sum(segm_output, axis=0)
++    # safely divide by overall_expsum, returning 0.0 if overall_expsum is 0
++    acc = tl.where(overall_expsum == 0.0, 0.0, acc_sum / overall_expsum)
++
++    # write result
++    output_offset = (query_token_idx * output_stride_0 +
++                     query_head_idx * output_stride_1 +
++                     tl.arange(0, HEAD_SIZE_PADDED))
++    tl.store(output_ptr + output_offset, acc, mask=dim_mask)
++
++@functools.lru_cache
++def find_block(a, b):
++    if a < 16 or b < 16:
++        return None
++    max_power = (b).bit_length() - 1
++    for k in range(max_power, 3, -1):
++        power = 1 << k
++        if a % power == 0:
++            return power
++    return None
++
++def unified_attention(
++    q,
++    k,
++    v,
++    out,
++    cu_seqlens_q,
++    max_seqlen_q,
++    seqused_k,
++    max_seqlen_k,
++    softmax_scale,
++    causal,
++    window_size,
++    block_table,
++    softcap,
++    q_descale,
++    k_descale,
++    v_descale,
++    alibi_slopes=None,
++):
++    assert causal, "Only causal attention is supported"
++    assert q_descale is None, "Q scales not supported"
++
++    use_alibi_slopes = alibi_slopes is not None
++    element_size = v.element_size()
++    cache_block_size = v.shape[1]
++    head_size = q.shape[2]
++    head_size_padded = triton.next_power_of_2(head_size)
++    block_size = cache_block_size
++
++    if block_size * head_size_padded * element_size > 16384: # 64 * 128 * 2
++        block_size = (16384 // (head_size_padded * element_size))
++        block_size = find_block(cache_block_size, block_size)
++        assert block_size != None, "can not find suitable block_size size for unified_attention"
++    assert element_size >= 2 or block_size >= 32, \
++        "Block size must be at least 32 for fp8"
++    # print(f"unified_attention: {block_size=}, {cache_block_size=}, {head_size_padded=}")
++
++    num_seqs = len(seqused_k)
++    num_query_heads = q.shape[1]
++    num_kv_heads = k.shape[2]
++    num_queries_per_kv = num_query_heads // num_kv_heads
++
++    BLOCK_M = 16
++    BLOCK_Q = BLOCK_M // num_queries_per_kv
++
++    # Ideally we would launch with kernel with:
++    # \sum_i[ceil(query_len[i] / BLOCK_Q)] blocks.
++    # However, it is slow to realize the query_lens on cpu.
++    # Instead we use upper-bound:
++    # \sum_i[ceil(query_len[i] / BLOCK_Q)]
++    #   <= \sum_i[floor(query_len[i] / BLOCK_Q) + 1]
++    #    = \sum_i[floor(query_len[i] / BLOCK_Q)] + num_seqs
++    #   <= floor(\sum_i(query_len[i]) / BLOCK_Q) + num_seqs
++    #    = floor(q.shape[0] / BLOCK_Q) + num_seqs
++    total_num_q_blocks = q.shape[0] // BLOCK_Q + num_seqs
++
++    # if batch contains a prefill
++    if max_seqlen_q > 1 or total_num_q_blocks * num_kv_heads > 128:
++        kernel_unified_attention_2d[(
++            total_num_q_blocks,
++            num_kv_heads,
++        )](
++            output_ptr=out,
++            query_ptr=q,
++            key_cache_ptr=k,
++            value_cache_ptr=v,
++            block_tables_ptr=block_table,
++            seq_lens_ptr=seqused_k,
++            alibi_slopes_ptr=alibi_slopes,
++            scale=softmax_scale,
++            k_scale=k_descale,
++            v_scale=v_descale,
++            softcap=softcap,
++            num_query_heads=num_query_heads,
++            num_queries_per_kv=num_queries_per_kv,
++            block_table_stride=block_table.stride(0),
++            query_stride_0=q.stride(0),
++            query_stride_1=q.stride(1),
++            output_stride_0=out.stride(0),
++            output_stride_1=out.stride(1),
++            BLOCK_SIZE=block_size,
++            CACHE_BLOCK_SIZE=cache_block_size,
++            HEAD_SIZE=head_size,
++            HEAD_SIZE_PADDED=head_size_padded,
++            USE_ALIBI_SLOPES=use_alibi_slopes,
++            USE_SOFTCAP=(softcap > 0),
++            SLIDING_WINDOW=(1 + window_size[0]),
++            stride_k_cache_0=k.stride(0),
++            stride_k_cache_1=k.stride(1),
++            stride_k_cache_2=k.stride(2),
++            stride_k_cache_3=k.stride(3),
++            stride_v_cache_0=v.stride(0),
++            stride_v_cache_1=v.stride(1),
++            stride_v_cache_2=v.stride(2),
++            stride_v_cache_3=v.stride(3),
++            query_start_len_ptr=cu_seqlens_q,
++            BLOCK_Q=BLOCK_Q,
++            num_seqs=num_seqs,
++            BLOCK_M=BLOCK_M,
++        )
++    else:
++        # The fixed serial Qwen3.5/BW decode gate benefits from exposing more
++        # split-K parallelism than the external AITER default 16 segments.
++        NUM_SEGMENTS = _xiandao_decode_segments()
++
++        segm_output = torch.empty(
++            q.shape[0],
++            num_query_heads,
++            NUM_SEGMENTS,
++            triton.next_power_of_2(head_size),
++            dtype=torch.float32,
++            device=q.device,
++        )
++        segm_max = torch.empty(
++            q.shape[0],
++            num_query_heads,
++            NUM_SEGMENTS,
++            dtype=torch.float32,
++            device=q.device,
++        )
++        segm_expsum = torch.empty(
++            q.shape[0],
++            num_query_heads,
++            NUM_SEGMENTS,
++            dtype=torch.float32,
++            device=q.device,
++        )
++
++        kernel_unified_attention_3d[(
++            total_num_q_blocks, num_kv_heads, NUM_SEGMENTS)](
++                segm_output_ptr=segm_output,
++                segm_max_ptr=segm_max,
++                segm_expsum_ptr=segm_expsum,
++                query_ptr=q,
++                key_cache_ptr=k,
++                value_cache_ptr=v,
++                block_tables_ptr=block_table,
++                seq_lens_ptr=seqused_k,
++                alibi_slopes_ptr=alibi_slopes,
++                scale=softmax_scale,
++                k_scale=k_descale,
++                v_scale=v_descale,
++                softcap=softcap,
++                num_query_heads=num_query_heads,
++                num_queries_per_kv=num_queries_per_kv,
++                block_table_stride=block_table.stride(0),
++                query_stride_0=q.stride(0),
++                query_stride_1=q.stride(1),
++                BLOCK_SIZE=block_size,
++                CACHE_BLOCK_SIZE=cache_block_size,
++                HEAD_SIZE=head_size,
++                HEAD_SIZE_PADDED=head_size_padded,
++                USE_ALIBI_SLOPES=use_alibi_slopes,
++                USE_SOFTCAP=(softcap > 0),
++                SLIDING_WINDOW=(1 + window_size[0]),
++                stride_k_cache_0=k.stride(0),
++                stride_k_cache_1=k.stride(1),
++                stride_k_cache_2=k.stride(2),
++                stride_k_cache_3=k.stride(3),
++                stride_v_cache_0=v.stride(0),
++                stride_v_cache_1=v.stride(1),
++                stride_v_cache_2=v.stride(2),
++                stride_v_cache_3=v.stride(3),
++                query_start_len_ptr=cu_seqlens_q,
++                BLOCK_Q=BLOCK_Q,
++                num_seqs=num_seqs,
++                BLOCK_M=BLOCK_M,
++                NUM_SEGMENTS_PER_SEQ=NUM_SEGMENTS,
++            )
++
++        reduce_segments[(q.shape[0], num_query_heads)](
++            output_ptr=out,
++            segm_output_ptr=segm_output,
++            segm_max_ptr=segm_max,
++            segm_expsum_ptr=segm_expsum,
++            seq_lens_ptr=seqused_k,
++            num_seqs=num_seqs,
++            num_query_heads=num_query_heads,
++            output_stride_0=out.stride(0),
++            output_stride_1=out.stride(1),
++            block_table_stride=block_table.stride(0),
++            BLOCK_SIZE=block_size,
++            HEAD_SIZE=head_size,
++            HEAD_SIZE_PADDED=triton.next_power_of_2(head_size),
++            query_start_len_ptr=cu_seqlens_q,
++            BLOCK_Q=BLOCK_Q,
++            NUM_SEGMENTS_PER_SEQ=NUM_SEGMENTS,
++        )
+diff -ruN -x __pycache__ -x '*.pyc' a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
+--- a/vllm/v1/core/kv_cache_utils.py	2026-08-26 10:28:49.000000000 +0000
++++ b/vllm/v1/core/kv_cache_utils.py	2026-10-08 02:37:27.000000000 +0000
+@@ -875,17 +875,43 @@
+     """
+     Get the maximum concurrency for the given KV cache configuration.
+     """
+-    num_layer_per_group = max(
+-        len(group.layer_names) for group in kv_cache_config.kv_cache_groups
+-    )
+-    max_memory_usage_per_request = num_layer_per_group * max_memory_usage_bytes(
+-        vllm_config, (group.kv_cache_spec for group in kv_cache_config.kv_cache_groups)
++    has_runtime_memory = any(
++        getattr(
++            group.kv_cache_spec,
++            "planned_page_size_bytes",
++            group.kv_cache_spec.page_size_bytes,
++        )
++        != group.kv_cache_spec.page_size_bytes
++        for group in kv_cache_config.kv_cache_groups
+     )
+-    memory_per_block = (
+-        kv_cache_config.kv_cache_groups[0].kv_cache_spec.page_size_bytes
+-        * num_layer_per_group
++    if not has_runtime_memory:
++        num_layer_per_group = max(
++            len(group.layer_names) for group in kv_cache_config.kv_cache_groups
++        )
++        max_memory_usage_per_request = num_layer_per_group * max_memory_usage_bytes(
++            vllm_config,
++            (group.kv_cache_spec for group in kv_cache_config.kv_cache_groups),
++        )
++        memory_per_block = (
++            kv_cache_config.kv_cache_groups[0].kv_cache_spec.page_size_bytes
++            * num_layer_per_group
++        )
++        num_block_per_request = cdiv(
++            max_memory_usage_per_request, memory_per_block
++        )
++        return kv_cache_config.num_blocks / num_block_per_request
++
++    num_block_per_request = sum(
++        cdiv(
++            group.kv_cache_spec.max_memory_usage_bytes(vllm_config),
++            getattr(
++                group.kv_cache_spec,
++                "planned_page_size_bytes",
++                group.kv_cache_spec.page_size_bytes,
++            ),
++        )
++        for group in kv_cache_config.kv_cache_groups
+     )
+-    num_block_per_request = cdiv(max_memory_usage_per_request, memory_per_block)
+     max_concurrency = kv_cache_config.num_blocks / num_block_per_request
+     return max_concurrency
+ 
+@@ -1309,7 +1335,8 @@
+         # different hidden sizes. Allocate different amount of memory for each
+         # layer based on its hidden size.
+         num_blocks = (
+-            available_memory // kv_cache_groups[0].kv_cache_spec.page_size_bytes
++            available_memory
++            // kv_cache_groups[0].kv_cache_spec.planned_page_size_bytes
+         )
+         num_blocks = may_override_num_blocks(vllm_config, num_blocks)
+         per_layer_specs = kv_cache_groups[0].kv_cache_spec.kv_cache_specs
+@@ -1344,9 +1371,29 @@
+             [group.kv_cache_spec for group in kv_cache_groups]
+         )
+         assert group_size > 0, "group_size must be greater than 0"
+-        num_blocks = get_num_blocks(
+-            vllm_config, group_size, available_memory, page_size
++        runtime_memory_per_block = sum(
++            len(group.layer_names)
++            * (
++                getattr(
++                    group.kv_cache_spec,
++                    "planned_page_size_bytes",
++                    group.kv_cache_spec.page_size_bytes,
++                )
++                - group.kv_cache_spec.page_size_bytes
++            )
++            for group in kv_cache_groups
++        )
++        planned_bytes_per_block = (
++            group_size * page_size + runtime_memory_per_block
+         )
++        if runtime_memory_per_block == 0:
++            num_blocks = get_num_blocks(
++                vllm_config, group_size, available_memory, page_size
++            )
++        else:
++            num_blocks = int(available_memory // planned_bytes_per_block)
++            num_blocks = max(num_blocks, 0)
++            num_blocks = may_override_num_blocks(vllm_config, num_blocks)
+         kv_cache_tensors = []
+         for i in range(group_size):
+             shared_by = []
+@@ -1439,6 +1486,7 @@
+                     kv_quant_mode=spec.kv_quant_mode,
+                     sliding_window=spec.sliding_window,
+                     page_size_padded=spec.page_size_padded,
++                    runtime_memory_per_token=spec.runtime_memory_per_token,
+                 )
+             elif isinstance(spec, ChunkedLocalAttentionSpec):
+                 kv_cache_spec[layer_name] = FullAttentionSpec(
+@@ -1448,6 +1496,7 @@
+                     dtype=spec.dtype,
+                     attention_chunk_size=spec.attention_chunk_size,
+                     page_size_padded=spec.page_size_padded,
++                    runtime_memory_per_token=spec.runtime_memory_per_token,
+                 )
+ 
+     if not (
+@@ -1818,12 +1867,36 @@
+     page_size = get_uniform_page_size(
+         [group.kv_cache_spec for group in kv_cache_groups]
+     )
+-    blocks_needed = sum(
+-        cdiv(group.kv_cache_spec.max_memory_usage_bytes(vllm_config), page_size)
++    any_spec = kv_cache_groups[0].kv_cache_spec
++    planned_page_size = getattr(
++        any_spec, "planned_page_size_bytes", any_spec.page_size_bytes
++    )
++    blocks_needed = cdiv(
++        any_spec.max_memory_usage_bytes(vllm_config), planned_page_size
++    )
++
++    runtime_memory_per_block = sum(
++        len(group.layer_names)
++        * (
++            getattr(
++                group.kv_cache_spec,
++                "planned_page_size_bytes",
++                group.kv_cache_spec.page_size_bytes,
++            )
++            - group.kv_cache_spec.page_size_bytes
++        )
+         for group in kv_cache_groups
+     )
+ 
+-    return group_size * page_size * blocks_needed
++    if runtime_memory_per_block == 0:
++        blocks_needed = cdiv(
++            any_spec.max_memory_usage_bytes(vllm_config), page_size
++        )
++        return group_size * page_size * blocks_needed
++
++    return (
++        group_size * page_size + runtime_memory_per_block
++    ) * blocks_needed
+ 
+ 
+ def _estimate_max_model_len_from_groups(
+diff -ruN -x __pycache__ -x '*.pyc' a/vllm/v1/kv_cache_interface.py b/vllm/v1/kv_cache_interface.py
+--- a/vllm/v1/kv_cache_interface.py	2026-08-26 10:27:51.000000000 +0000
++++ b/vllm/v1/kv_cache_interface.py	2026-10-08 02:37:27.000000000 +0000
+@@ -134,6 +134,12 @@
+     dtype: torch.dtype
+     kv_quant_mode: KVQuantMode = KVQuantMode.NONE
+     page_size_padded: int | None = None
++    runtime_memory_per_token: int = 0
++
++    @property
++    def planned_page_size_bytes(self) -> int:
++        """Physical page bytes plus backend-owned persistent runtime memory."""
++        return self.page_size_bytes + self.block_size * self.runtime_memory_per_token
+ 
+     @property
+     def page_size_bytes(self) -> int:
+@@ -202,7 +208,7 @@
+         # (max_model_len//dcp_world_size) tokens locally.
+         if dcp_world_size * pcp_world_size > 1:
+             max_model_len = cdiv(max_model_len, dcp_world_size * pcp_world_size)
+-        return cdiv(max_model_len, self.block_size) * self.page_size_bytes
++        return cdiv(max_model_len, self.block_size) * self.planned_page_size_bytes
+ 
+     @classmethod
+     def merge_window_sizes(cls, window_sizes: set[int]) -> int | None:
+@@ -245,6 +251,7 @@
+             dtype=specs[0].dtype,
+             kv_quant_mode=specs[0].kv_quant_mode,
+             page_size_padded=specs[0].page_size_padded,
++            runtime_memory_per_token=specs[0].runtime_memory_per_token,
+             sliding_window=cls.merge_window_sizes(sliding_window),
+             attention_chunk_size=cls.merge_window_sizes(attention_chunk_size),
+         )
+@@ -377,6 +384,7 @@
+             dtype=specs[0].dtype,
+             kv_quant_mode=specs[0].kv_quant_mode,
+             page_size_padded=specs[0].page_size_padded,
++            runtime_memory_per_token=specs[0].runtime_memory_per_token,
+             cache_dtype_str=cache_dtype_str_set.pop(),
+             compress_ratio=compress_ratio_set.pop(),
+             model_version=model_version_set.pop(),
+@@ -623,6 +631,7 @@
+             dtype=specs[0].dtype,
+             kv_quant_mode=specs[0].kv_quant_mode,
+             page_size_padded=specs[0].page_size_padded,
++            runtime_memory_per_token=specs[0].runtime_memory_per_token,
+             sliding_window=cls.merge_window_sizes(sliding_window),
+             attention_chunk_size=cls.merge_window_sizes(attention_chunk_size),
+         )
+@@ -656,12 +665,22 @@
+     def page_size_bytes(self) -> int:
+         return sum(spec.page_size_bytes for spec in self.kv_cache_specs.values())
+ 
++    @property
++    def planned_page_size_bytes(self) -> int:
++        return sum(
++            getattr(spec, "planned_page_size_bytes", spec.page_size_bytes)
++            for spec in self.kv_cache_specs.values()
++        )
++
+     def max_memory_usage_bytes(self, vllm_config: VllmConfig) -> int:
+         max_num_pages = max(
+-            cdiv(spec.max_memory_usage_bytes(vllm_config), spec.page_size_bytes)
++            cdiv(
++                spec.max_memory_usage_bytes(vllm_config),
++                getattr(spec, "planned_page_size_bytes", spec.page_size_bytes),
++            )
+             for spec in self.kv_cache_specs.values()
+         )
+-        return max_num_pages * self.page_size_bytes
++        return max_num_pages * self.planned_page_size_bytes
+ 
+     @classmethod
+     def is_uniform_type(cls, kv_cache_specs: dict[str, KVCacheSpec]) -> bool:
