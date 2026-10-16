@@ -22,6 +22,10 @@ DATASET_PATH=${DATASET_PATH:-"/data/dataset/ShareGPT_V3_unfiltered_cleaned_split
 VLLM_BASE="${BASE_URL%/}"
 [[ "${VLLM_BASE}" != */v1 ]] && VLLM_BASE="${VLLM_BASE}/v1"
 
+# vLLM openai backend 要求 base-url 带 /v1（sglang 不带，这里自动补）
+VLLM_BASE="${BASE_URL%/}"
+[[ "${VLLM_BASE}" != */v1 ]] && VLLM_BASE="${VLLM_BASE}/v1"
+
 if [ ! -f "${DATASET_PATH}" ]; then
   echo "错误: 未找到 ShareGPT 数据集文件: ${DATASET_PATH}"
   echo "请设置环境变量 DATASET_PATH 指向实际路径，例如:"
