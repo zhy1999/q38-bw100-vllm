@@ -70,7 +70,7 @@ for c in "${CONCURRENCIES[@]}"; do
       --served-model-name "${SERVED_MODEL_NAME}" \
       --tokenizer-dir "${TOKENIZER_DIR}" \
       --dataset-path "${DATASET_PATH}" \
-      --sharegpt-context-len "${SHAREGPT_CONTEXT_LEN:-2048}" \
+      --sharegpt-context-len "${SHAREGPT_CONTEXT_LEN:-4096}" \
       --num-prompts "${NUM_PROMPTS}" \
       --max-concurrency "${c}" \
       --warmup-requests "${warmup_reqs}" \

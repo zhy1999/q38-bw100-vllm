@@ -18,7 +18,7 @@ def parse_args():
     p.add_argument('--sharegpt-context-len', type=int, default=2048)
     p.add_argument('--num-prompts', type=int, default=1000)
     p.add_argument('--max-concurrency', type=int, default=1)
-    p.add_argument('--max-tokens', type=int, default=1024)
+    p.add_argument('--max-tokens', type=int, default=2048)  # 上限；实际用数据集真实回复长度
     p.add_argument('--warmup-requests', type=int, default=0)
     p.add_argument('--seed', type=int, default=20260912)
     p.add_argument('--output-file', required=True)
@@ -43,19 +43,32 @@ def load_prompts(args, tokenizer):
                 objs.append(json.loads(line))
     for obj in objs:
         conv = obj.get('conversations') or []
-        texts = [m.get('value', '') for m in conv if m.get('from') == 'human']
-        if texts:
-            rows.append(texts[0])
+        human = assistant = None
+        for m in conv:
+            role = m.get('from')
+            if role == 'human' and human is None:
+                human = m.get('value', '')
+            elif role in ('gpt', 'assistant') and human is not None and assistant is None:
+                assistant = m.get('value', '')
+        if not human:
+            continue
+        # output length = real assistant reply length (vllm sharegpt sampler 口径)
+        if assistant:
+            out_ids = tokenizer(assistant, add_special_tokens=False)['input_ids']
+            out_len = min(len(out_ids), args.max_tokens)
+        else:
+            out_len = args.max_tokens
+        rows.append((human, out_len))
     rng = random.Random(args.seed)
     rows = rng.sample(rows, min(args.num_prompts, len(rows)))
-    # truncate with tokenizer to context len
+    # truncate prompt with tokenizer to context len
     prompts = []
-    for t in rows:
+    for t, out_len in rows:
         ids = tokenizer(t, add_special_tokens=False)['input_ids']
         if len(ids) > args.sharegpt_context_len:
             ids = ids[:args.sharegpt_context_len]
             t = tokenizer.decode(ids)
-        prompts.append(t)
+        prompts.append((t, out_len))
     return prompts
 
 def send_one(base, model, prompt, max_tokens, out):
@@ -96,10 +109,12 @@ def main():
     prompts = load_prompts(args, tok)
     results = []
     lock = threading.Lock()
-    def worker(p):
-        send_one(args.base_url, args.served_model_name, p, args.max_tokens, results)
+    def worker(pair):
+        p, out_len = pair
+        send_one(args.base_url, args.served_model_name, p, out_len, results)
     for _ in range(args.warmup_requests):
-        send_one(args.base_url, args.served_model_name, prompts[0], args.max_tokens, [])
+        p0, out0 = prompts[0]
+        send_one(args.base_url, args.served_model_name, p0, out0, [])
         print(f'[warmup] {_+1}/{args.warmup_requests}', flush=True)
     t_start = time.perf_counter()
     done = [0]
