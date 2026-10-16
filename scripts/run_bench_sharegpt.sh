@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # 脚本名称: run_bench_sharegpt.sh
-# 脚本功能: 自动化执行 ShareGPT 真实对话数据集基准测试
+# 脚本功能: 自动化执行 ShareGPT 真实对话数据集基准测试（vLLM 客户端版）
 # 测试规范:
-#   - 并发档位: C1, C4, C16, C32, C64
+#   - 并发档位: C1, C4, C16, C32, C64（可用 SHAREGPT_CONCURRENCIES 覆盖）
 #   - 每档执行 3 轮正式测试，每轮 1000 个请求，2×并发进行预热
+# 客户端: python3 -m vllm.benchmarks.benchmark_serving（OpenAI 协议 → vLLM 服务）
 # ==============================================================================
 
 set -euo pipefail
@@ -15,23 +16,28 @@ RESULT_BASE_DIR="${PROJECT_DIR}/result/sharegpt"
 BASE_URL=${BASE_URL:-"http://127.0.0.1:18680"}
 MODEL_PATH=${MODEL_PATH:-"/model"}
 SERVED_MODEL_NAME=${SERVED_MODEL_NAME:-"qwen38-vllm021"}
-DATASET_PATH=${DATASET_PATH:-"/dataset/ShareGPT_V3_unfiltered_cleaned_split.json"}
+DATASET_PATH=${DATASET_PATH:-"/data/dataset/ShareGPT_V3_unfiltered_cleaned_split.json"}
+
+# vLLM openai backend 要求 base-url 带 /v1（sglang 不带，这里自动补）
+VLLM_BASE="${BASE_URL%/}"
+[[ "${VLLM_BASE}" != */v1 ]] && VLLM_BASE="${VLLM_BASE}/v1"
 
 if [ ! -f "${DATASET_PATH}" ]; then
   echo "错误: 未找到 ShareGPT 数据集文件: ${DATASET_PATH}"
-  echo "请检查挂载或设置环境变量 DATASET_PATH"
+  echo "请设置环境变量 DATASET_PATH 指向实际路径，例如:"
+  echo "  export DATASET_PATH=/data/datasets/ShareGPT_V3_unfiltered_cleaned_split.json"
   exit 1
 fi
 
 mkdir -p "${RESULT_BASE_DIR}"
 
-CONCURRENCIES=(1 4 16 32 64)
-NUM_PROMPTS=1000
-ROUNDS=3
+CONCURRENCIES=(${SHAREGPT_CONCURRENCIES:-1 4 16 32 64})
+NUM_PROMPTS=${NUM_PROMPTS:-1000}
+ROUNDS=${ROUNDS:-3}
 
 echo "================================================================"
-echo "开始 ShareGPT 真实数据集基准测试"
-echo "服务地址: ${BASE_URL}"
+echo "开始 ShareGPT 真实数据集基准测试（vLLM 客户端）"
+echo "服务地址: ${VLLM_BASE}"
 echo "模型名称: ${SERVED_MODEL_NAME}"
 echo "数据集路径: ${DATASET_PATH}"
 echo "并发档位: ${CONCURRENCIES[*]}"
@@ -54,11 +60,13 @@ for c in "${CONCURRENCIES[@]}"; do
 
     echo "[C${c}] 开始第 ${r}/${ROUNDS} 轮测试 -> ${output_file}"
 
-    vllm bench serve "${MODEL_PATH}" \
-      --base-url "${BASE_URL}" \
-      --served-model-name "${SERVED_MODEL_NAME}" \
+    python3 -u -m vllm.benchmarks.benchmark_serving \
+      --backend openai \
+      --base-url "${VLLM_BASE}" \
       --dataset-name sharegpt \
       --dataset-path "${DATASET_PATH}" \
+      --model "${MODEL_PATH}" \
+      --served-model-name "${SERVED_MODEL_NAME}" \
       --sharegpt-context-len 131072 \
       --num-prompts "${NUM_PROMPTS}" \
       --max-concurrency "${c}" \
@@ -66,7 +74,7 @@ for c in "${CONCURRENCIES[@]}"; do
       --warmup-requests "${warmup_reqs}" \
       --seed 20260912 \
       --disable-tqdm \
-      --output-file "${output_file}"
+      --output-file "${output_file}" 2>&1 | tee "${c_dir}/round-${round_str}.log"
 
     echo "[C${c}] 第 ${r}/${ROUNDS} 轮完成"
     sleep 5
@@ -76,3 +84,4 @@ done
 echo "================================================================"
 echo "ShareGPT 评测全部完成！测试结果保存在: ${RESULT_BASE_DIR}"
 echo "================================================================"
+EOF
