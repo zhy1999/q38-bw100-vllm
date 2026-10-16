@@ -17,7 +17,7 @@ BASE_URL=${BASE_URL:-"http://127.0.0.1:18680"}
 MODEL_PATH=${MODEL_PATH:-"/model"}
 SERVED_MODEL_NAME=${SERVED_MODEL_NAME:-"qwen38-vllm021"}
 DATASET_PATH=${DATASET_PATH:-"/dataset/ShareGPT_V3_unfiltered_cleaned_split.json"}
-TOKENIZER_DIR=${TOKENIZER_DIR:-"/models/hygon/Qwen3.8-27B-Channel-INT8-w8a8"}
+TOKENIZER_DIR=${TOKENIZER_DIR:-"/models/hygon/Qwen3.8-27B-Channel-INT8-w8a8"}  # 默认容器内模型路径；宿主机跑时指向 /data/models/hygon/Qwen3.8-27B-Channel-INT8-w8a8
 
 # vLLM openai backend 要求 base-url 带 /v1（sglang 不带，这里自动补）
 VLLM_BASE="${BASE_URL%/}"
