@@ -345,7 +345,7 @@ def parser():
     p.add_argument('--insecure-dataset-download', action='store_true')
     p.add_argument('--vlm-data-base-url', default='https://opencompass.openxlab.space/utils/VLMEval')
     p.add_argument('--base-url', default='http://127.0.0.1:18680/v1')
-    p.add_argument('--model', default='Qwen3.8-27B-Channel-INT8-w8a8')
+    p.add_argument('--model', default='qwen38-vllm021')
     p.add_argument('--model-revision', default='')
     p.add_argument('--max-tokens', type=int, default=32768)
     p.add_argument('--gsm8k-max-tokens', type=int, default=512, help='Preserve upstream GSM8K default unless explicitly overridden')
