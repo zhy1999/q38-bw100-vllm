@@ -5,7 +5,7 @@
 # 测试规范:
 #   - 并发档位: C1, C4, C16, C32, C64（可用 SHAREGPT_CONCURRENCIES 覆盖）
 #   - 每档执行 3 轮正式测试，每轮 1000 个请求，2×并发进行预热
-# 客户端: python3 -m vllm.benchmarks.benchmark_serving（OpenAI 协议 → vLLM 服务）
+# 客户端: scripts/sharegpt_bench.py（零框架依赖，SSE 流式测 TTFT/TPOT/吞吐）
 # ==============================================================================
 
 set -euo pipefail
@@ -16,7 +16,8 @@ RESULT_BASE_DIR="${PROJECT_DIR}/result/sharegpt"
 BASE_URL=${BASE_URL:-"http://127.0.0.1:18680"}
 MODEL_PATH=${MODEL_PATH:-"/model"}
 SERVED_MODEL_NAME=${SERVED_MODEL_NAME:-"qwen38-vllm021"}
-DATASET_PATH=${DATASET_PATH:-"/data/dataset/ShareGPT_V3_unfiltered_cleaned_split.json"}
+DATASET_PATH=${DATASET_PATH:-"/dataset/ShareGPT_V3_unfiltered_cleaned_split.json"}
+TOKENIZER_DIR=${TOKENIZER_DIR:-"/models/hygon/Qwen3.8-27B-Channel-INT8-w8a8"}
 
 # vLLM openai backend 要求 base-url 带 /v1（sglang 不带，这里自动补）
 VLLM_BASE="${BASE_URL%/}"
@@ -64,20 +65,16 @@ for c in "${CONCURRENCIES[@]}"; do
 
     echo "[C${c}] 开始第 ${r}/${ROUNDS} 轮测试 -> ${output_file}"
 
-    python3 -u -m vllm.benchmarks.benchmark_serving \
-      --backend openai \
+    python3 -u "${PROJECT_DIR}/scripts/sharegpt_bench.py" \
       --base-url "${VLLM_BASE}" \
-      --dataset-name sharegpt \
-      --dataset-path "${DATASET_PATH}" \
-      --model "${MODEL_PATH}" \
       --served-model-name "${SERVED_MODEL_NAME}" \
+      --tokenizer-dir "${TOKENIZER_DIR}" \
+      --dataset-path "${DATASET_PATH}" \
       --sharegpt-context-len 131072 \
       --num-prompts "${NUM_PROMPTS}" \
       --max-concurrency "${c}" \
-      --request-rate inf \
       --warmup-requests "${warmup_reqs}" \
       --seed 20260912 \
-      --disable-tqdm \
       --output-file "${output_file}" 2>&1 | tee "${c_dir}/round-${round_str}.log"
 
     echo "[C${c}] 第 ${r}/${ROUNDS} 轮完成"
