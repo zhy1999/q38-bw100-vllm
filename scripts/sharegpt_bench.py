@@ -27,15 +27,25 @@ def parse_args():
 def load_prompts(args, tokenizer):
     rows = []
     with open(args.dataset_path, encoding='utf-8') as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            obj = json.loads(line)
-            conv = obj.get('conversations') or []
-            texts = [m.get('value', '') for m in conv if m.get('from') == 'human']
-            if texts:
-                rows.append(texts[0])
+        first = f.read(1)
+    objs = []
+    if first == '[':
+        # pretty-printed JSON array (one conversation per object)
+        with open(args.dataset_path, encoding='utf-8') as f:
+            objs = json.load(f)
+    else:
+        # JSONL: one conversation per line
+        with open(args.dataset_path, encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                objs.append(json.loads(line))
+    for obj in objs:
+        conv = obj.get('conversations') or []
+        texts = [m.get('value', '') for m in conv if m.get('from') == 'human']
+        if texts:
+            rows.append(texts[0])
     rng = random.Random(args.seed)
     rows = rng.sample(rows, min(args.num_prompts, len(rows)))
     # truncate with tokenizer to context len
