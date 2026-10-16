@@ -1,3 +1,4 @@
+# vLLM 框架优化补丁（qwen35-merge-m1b-fix1） — 本目录同时存放评测结果与优化补丁
 # vLLM 框架优化补丁（qwen35-merge-m1b-fix1）
 
 > 来源：`/root/.openclaw/workspace/qwen35-merge-m1b-fix1/`（2026-10-16 交付）
