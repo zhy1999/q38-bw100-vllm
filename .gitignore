@@ -21,6 +21,8 @@ result/**
 !result/fixed/
 !result/fixed/**
 !result/benchmark-*.md
+!result/REPORT.md
+!result/BASELINE_COMPLIANCE.md
 # OS
 .DS_Store
 Thumbs.db
