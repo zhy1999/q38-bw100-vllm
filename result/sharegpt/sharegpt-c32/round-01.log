@@ -1,0 +1,119 @@
+[warmup] 1/64
+[warmup] 2/64
+[warmup] 3/64
+[warmup] 4/64
+[warmup] 5/64
+[warmup] 6/64
+[warmup] 7/64
+[warmup] 8/64
+[warmup] 9/64
+[warmup] 10/64
+[warmup] 11/64
+[warmup] 12/64
+[warmup] 13/64
+[warmup] 14/64
+[warmup] 15/64
+[warmup] 16/64
+[warmup] 17/64
+[warmup] 18/64
+[warmup] 19/64
+[warmup] 20/64
+[warmup] 21/64
+[warmup] 22/64
+[warmup] 23/64
+[warmup] 24/64
+[warmup] 25/64
+[warmup] 26/64
+[warmup] 27/64
+[warmup] 28/64
+[warmup] 29/64
+[warmup] 30/64
+[warmup] 31/64
+[warmup] 32/64
+[warmup] 33/64
+[warmup] 34/64
+[warmup] 35/64
+[warmup] 36/64
+[warmup] 37/64
+[warmup] 38/64
+[warmup] 39/64
+[warmup] 40/64
+[warmup] 41/64
+[warmup] 42/64
+[warmup] 43/64
+[warmup] 44/64
+[warmup] 45/64
+[warmup] 46/64
+[warmup] 47/64
+[warmup] 48/64
+[warmup] 49/64
+[warmup] 50/64
+[warmup] 51/64
+[warmup] 52/64
+[warmup] 53/64
+[warmup] 54/64
+[warmup] 55/64
+[warmup] 56/64
+[warmup] 57/64
+[warmup] 58/64
+[warmup] 59/64
+[warmup] 60/64
+[warmup] 61/64
+[warmup] 62/64
+[warmup] 63/64
+[warmup] 64/64
+[progress] 25/1000 requests done
+[progress] 50/1000 requests done
+[progress] 75/1000 requests done
+[progress] 100/1000 requests done
+[progress] 125/1000 requests done
+[progress] 150/1000 requests done
+[progress] 175/1000 requests done
+[progress] 200/1000 requests done
+[progress] 225/1000 requests done
+[progress] 250/1000 requests done
+[progress] 275/1000 requests done
+[progress] 300/1000 requests done
+[progress] 325/1000 requests done
+[progress] 350/1000 requests done
+[progress] 375/1000 requests done
+[progress] 400/1000 requests done
+[progress] 425/1000 requests done
+[progress] 450/1000 requests done
+[progress] 475/1000 requests done
+[progress] 500/1000 requests done
+[progress] 525/1000 requests done
+[progress] 550/1000 requests done
+[progress] 575/1000 requests done
+[progress] 600/1000 requests done
+[progress] 625/1000 requests done
+[progress] 650/1000 requests done
+[progress] 675/1000 requests done
+[progress] 700/1000 requests done
+[progress] 725/1000 requests done
+[progress] 750/1000 requests done
+[progress] 775/1000 requests done
+[progress] 800/1000 requests done
+[progress] 825/1000 requests done
+[progress] 850/1000 requests done
+[progress] 875/1000 requests done
+[progress] 900/1000 requests done
+[progress] 925/1000 requests done
+[progress] 950/1000 requests done
+[progress] 975/1000 requests done
+[progress] 1000/1000 requests done
+{
+  "started_at": "2026-10-16T23:23:31.551092+00:00",
+  "wall_s": 491.44,
+  "requests": 1000,
+  "ok": 1000,
+  "output_tokens": 0,
+  "throughput_tps": 0.0,
+  "ttft_ms_mean": 477.55,
+  "ttft_ms_p50": 432.48,
+  "ttft_ms_p95": 594.37,
+  "tpot_ms_mean": null,
+  "tpot_ms_p50": null,
+  "tpot_ms_p95": null,
+  "latency_ms_mean": 15302.5
+}

@@ -1,0 +1,87 @@
+[warmup] 1/32
+[warmup] 2/32
+[warmup] 3/32
+[warmup] 4/32
+[warmup] 5/32
+[warmup] 6/32
+[warmup] 7/32
+[warmup] 8/32
+[warmup] 9/32
+[warmup] 10/32
+[warmup] 11/32
+[warmup] 12/32
+[warmup] 13/32
+[warmup] 14/32
+[warmup] 15/32
+[warmup] 16/32
+[warmup] 17/32
+[warmup] 18/32
+[warmup] 19/32
+[warmup] 20/32
+[warmup] 21/32
+[warmup] 22/32
+[warmup] 23/32
+[warmup] 24/32
+[warmup] 25/32
+[warmup] 26/32
+[warmup] 27/32
+[warmup] 28/32
+[warmup] 29/32
+[warmup] 30/32
+[warmup] 31/32
+[warmup] 32/32
+[progress] 25/1000 requests done
+[progress] 50/1000 requests done
+[progress] 75/1000 requests done
+[progress] 100/1000 requests done
+[progress] 125/1000 requests done
+[progress] 150/1000 requests done
+[progress] 175/1000 requests done
+[progress] 200/1000 requests done
+[progress] 225/1000 requests done
+[progress] 250/1000 requests done
+[progress] 275/1000 requests done
+[progress] 300/1000 requests done
+[progress] 325/1000 requests done
+[progress] 350/1000 requests done
+[progress] 375/1000 requests done
+[progress] 400/1000 requests done
+[progress] 425/1000 requests done
+[progress] 450/1000 requests done
+[progress] 475/1000 requests done
+[progress] 500/1000 requests done
+[progress] 525/1000 requests done
+[progress] 550/1000 requests done
+[progress] 575/1000 requests done
+[progress] 600/1000 requests done
+[progress] 625/1000 requests done
+[progress] 650/1000 requests done
+[progress] 675/1000 requests done
+[progress] 700/1000 requests done
+[progress] 725/1000 requests done
+[progress] 750/1000 requests done
+[progress] 775/1000 requests done
+[progress] 800/1000 requests done
+[progress] 825/1000 requests done
+[progress] 850/1000 requests done
+[progress] 875/1000 requests done
+[progress] 900/1000 requests done
+[progress] 925/1000 requests done
+[progress] 950/1000 requests done
+[progress] 975/1000 requests done
+[progress] 1000/1000 requests done
+{
+  "started_at": "2026-10-16T23:06:09.976332+00:00",
+  "wall_s": 684.39,
+  "requests": 1000,
+  "ok": 1000,
+  "output_tokens": 0,
+  "throughput_tps": 0.0,
+  "ttft_ms_mean": 391.72,
+  "ttft_ms_p50": 356.97,
+  "ttft_ms_p95": 488.25,
+  "tpot_ms_mean": null,
+  "tpot_ms_p50": null,
+  "tpot_ms_p95": null,
+  "latency_ms_mean": 10815.86
+}

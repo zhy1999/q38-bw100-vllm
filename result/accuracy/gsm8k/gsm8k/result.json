@@ -1,0 +1,9 @@
+{
+  "benchmark": "gsm8k",
+  "score": 95.4510993176649,
+  "evaluated": 1319,
+  "status": "scored",
+  "smoke": false,
+  "protocol": "OpenCompass gsm8k_gen_1d7fe4: 4-shot CoT, exact numeric match",
+  "math_judge": null
+}

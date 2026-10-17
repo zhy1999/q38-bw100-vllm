@@ -1,0 +1,5 @@
+﻿benchmark,baseline,threshold,score,drop_pp,evaluated,expected,status,error,protocol,math_judge
+GSM8K,97.0,95.0,95.4510993176649,1.548900682335102,1319,1319,PASS,,"OpenCompass gsm8k_gen_1d7fe4: 4-shot CoT, exact numeric match",
+LiveCodeBench v6,90.3,88.3,,,0,175,MISSING,,test6.jsonl only; Python; zero-shot; n=1; pass@1,
+RealWorldQA,85.9,83.9,,,0,765,MISSING,,VLMEvalKit RealWorldQA.tsv; zero-shot; exact_matching,
+MathVision (Without CI),90.0,88.0,,,0,304,MISSING,,MathVision_MINI / testmini; zero-shot; no code interpreter,

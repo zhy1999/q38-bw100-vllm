@@ -1,0 +1,19 @@
+{
+  "started_at": "2026-10-16T09:41:49.397805+00:00",
+  "command": [
+    "/data/tools/vllm-lunch/q38-bw100-sglang/scripts/accuracy.py",
+    "run",
+    "--benchmarks",
+    "gsm8k",
+    "--concurrency",
+    "8",
+    "--output-dir",
+    "result/accuracy/gsm8k",
+    "--base-url",
+    "http://127.0.0.1:18680",
+    "--model",
+    "qwen38-vllm021"
+  ],
+  "model": "qwen38-vllm021",
+  "base_url": "http://127.0.0.1:18680/v1"
+}

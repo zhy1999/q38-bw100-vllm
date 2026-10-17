@@ -1,0 +1,58 @@
+{
+  "created_at": "2026-10-17T04:22:02.416323+00:00",
+  "overall": "INCOMPLETE",
+  "results": [
+    {
+      "benchmark": "GSM8K",
+      "baseline": 97.0,
+      "threshold": 95.0,
+      "score": 95.4510993176649,
+      "drop_pp": 1.548900682335102,
+      "evaluated": 1319,
+      "expected": 1319,
+      "status": "PASS",
+      "error": "",
+      "protocol": "OpenCompass gsm8k_gen_1d7fe4: 4-shot CoT, exact numeric match",
+      "math_judge": null
+    },
+    {
+      "benchmark": "LiveCodeBench v6",
+      "baseline": 90.3,
+      "threshold": 88.3,
+      "score": null,
+      "drop_pp": null,
+      "evaluated": 0,
+      "expected": 175,
+      "status": "MISSING",
+      "error": "",
+      "protocol": "test6.jsonl only; Python; zero-shot; n=1; pass@1",
+      "math_judge": null
+    },
+    {
+      "benchmark": "RealWorldQA",
+      "baseline": 85.9,
+      "threshold": 83.9,
+      "score": null,
+      "drop_pp": null,
+      "evaluated": 0,
+      "expected": 765,
+      "status": "MISSING",
+      "error": "",
+      "protocol": "VLMEvalKit RealWorldQA.tsv; zero-shot; exact_matching",
+      "math_judge": null
+    },
+    {
+      "benchmark": "MathVision (Without CI)",
+      "baseline": 90.0,
+      "threshold": 88.0,
+      "score": null,
+      "drop_pp": null,
+      "evaluated": 0,
+      "expected": 304,
+      "status": "MISSING",
+      "error": "",
+      "protocol": "MathVision_MINI / testmini; zero-shot; no code interpreter",
+      "math_judge": null
+    }
+  ]
+}

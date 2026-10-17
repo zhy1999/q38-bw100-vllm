@@ -1,0 +1,63 @@
+[warmup] 1/8
+[warmup] 2/8
+[warmup] 3/8
+[warmup] 4/8
+[warmup] 5/8
+[warmup] 6/8
+[warmup] 7/8
+[warmup] 8/8
+[progress] 25/1000 requests done
+[progress] 50/1000 requests done
+[progress] 75/1000 requests done
+[progress] 100/1000 requests done
+[progress] 125/1000 requests done
+[progress] 150/1000 requests done
+[progress] 175/1000 requests done
+[progress] 200/1000 requests done
+[progress] 225/1000 requests done
+[progress] 250/1000 requests done
+[progress] 275/1000 requests done
+[progress] 300/1000 requests done
+[progress] 325/1000 requests done
+[progress] 350/1000 requests done
+[progress] 375/1000 requests done
+[progress] 400/1000 requests done
+[progress] 425/1000 requests done
+[progress] 450/1000 requests done
+[progress] 475/1000 requests done
+[progress] 500/1000 requests done
+[progress] 525/1000 requests done
+[progress] 550/1000 requests done
+[progress] 575/1000 requests done
+[progress] 600/1000 requests done
+[progress] 625/1000 requests done
+[progress] 650/1000 requests done
+[progress] 675/1000 requests done
+[progress] 700/1000 requests done
+[progress] 725/1000 requests done
+[progress] 750/1000 requests done
+[progress] 775/1000 requests done
+[progress] 800/1000 requests done
+[progress] 825/1000 requests done
+[progress] 850/1000 requests done
+[progress] 875/1000 requests done
+[progress] 900/1000 requests done
+[progress] 925/1000 requests done
+[progress] 950/1000 requests done
+[progress] 975/1000 requests done
+[progress] 1000/1000 requests done
+{
+  "started_at": "2026-10-16T21:03:55.009879+00:00",
+  "wall_s": 1990.05,
+  "requests": 1000,
+  "ok": 1000,
+  "output_tokens": 0,
+  "throughput_tps": 0.0,
+  "ttft_ms_mean": 316.77,
+  "ttft_ms_p50": 302.6,
+  "ttft_ms_p95": 376.42,
+  "tpot_ms_mean": null,
+  "tpot_ms_p50": null,
+  "tpot_ms_p95": null,
+  "latency_ms_mean": 7943.93
+}

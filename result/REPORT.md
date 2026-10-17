@@ -161,10 +161,15 @@ c64 起 TTFT 8.31s 与 TPOT 76.3ms 双双超线。吞吐在 c64→c128 仍单调
   换非量化权重需移除 `VLLM_HCU_USE_CUSTOM_QUANTIZATION_GEMM` 与 `--quantization` 参数。
 - **关闭 prefix-caching**：实测配置未开；若评测负载含高比例共享前缀，需重新评估。
 
-### 5.3 精度校验（待补）
+### 5.3 精度校验（GSM8K 已补测）
 
-提交时未执行精度测试（`scripts/run_accuracy.sh` 已就绪）。量化/投机解码对精度的影响
-未在本报告覆盖，如需完整合规，请按 accuracy 流程补测 GSM8K（或官方指定集）并回填本节。
+- **GSM8K**（OpenCompass `gsm8k_gen_1d7fe4`，4-shot CoT，精确数字匹配）：
+  **95.4511%**（1319/1319），官方基线 97.0% / 阈值 95.0% → **PASS**（降幅 1.55pp，阈值余量 0.45pp）。
+- 实测命令：`scripts/run_accuracy.sh run --benchmarks gsm8k --concurrency 8 --output-dir result/accuracy/gsm8k`
+- 原始数据：`result/accuracy/gsm8k/gsm8k/`（`result.json` + `predictions.jsonl` + `evaluation.json`），日志 `logs/gsm8k_run.log`
+- 结论：W8A8 量化 + MTP 投机解码未造成精度跌破阈值（95.0），量化精度风险可控。
+- 其余三项（LiveCodeBench / RealWorldQA / MathVision）按当前提交范围**不执行**，
+  报告仅覆盖 GSM8K 精度校验。
 
 ### 5.4 未吃到的收益（后续可挖掘）
 

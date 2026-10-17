@@ -1,0 +1,183 @@
+[warmup] 1/128
+[warmup] 2/128
+[warmup] 3/128
+[warmup] 4/128
+[warmup] 5/128
+[warmup] 6/128
+[warmup] 7/128
+[warmup] 8/128
+[warmup] 9/128
+[warmup] 10/128
+[warmup] 11/128
+[warmup] 12/128
+[warmup] 13/128
+[warmup] 14/128
+[warmup] 15/128
+[warmup] 16/128
+[warmup] 17/128
+[warmup] 18/128
+[warmup] 19/128
+[warmup] 20/128
+[warmup] 21/128
+[warmup] 22/128
+[warmup] 23/128
+[warmup] 24/128
+[warmup] 25/128
+[warmup] 26/128
+[warmup] 27/128
+[warmup] 28/128
+[warmup] 29/128
+[warmup] 30/128
+[warmup] 31/128
+[warmup] 32/128
+[warmup] 33/128
+[warmup] 34/128
+[warmup] 35/128
+[warmup] 36/128
+[warmup] 37/128
+[warmup] 38/128
+[warmup] 39/128
+[warmup] 40/128
+[warmup] 41/128
+[warmup] 42/128
+[warmup] 43/128
+[warmup] 44/128
+[warmup] 45/128
+[warmup] 46/128
+[warmup] 47/128
+[warmup] 48/128
+[warmup] 49/128
+[warmup] 50/128
+[warmup] 51/128
+[warmup] 52/128
+[warmup] 53/128
+[warmup] 54/128
+[warmup] 55/128
+[warmup] 56/128
+[warmup] 57/128
+[warmup] 58/128
+[warmup] 59/128
+[warmup] 60/128
+[warmup] 61/128
+[warmup] 62/128
+[warmup] 63/128
+[warmup] 64/128
+[warmup] 65/128
+[warmup] 66/128
+[warmup] 67/128
+[warmup] 68/128
+[warmup] 69/128
+[warmup] 70/128
+[warmup] 71/128
+[warmup] 72/128
+[warmup] 73/128
+[warmup] 74/128
+[warmup] 75/128
+[warmup] 76/128
+[warmup] 77/128
+[warmup] 78/128
+[warmup] 79/128
+[warmup] 80/128
+[warmup] 81/128
+[warmup] 82/128
+[warmup] 83/128
+[warmup] 84/128
+[warmup] 85/128
+[warmup] 86/128
+[warmup] 87/128
+[warmup] 88/128
+[warmup] 89/128
+[warmup] 90/128
+[warmup] 91/128
+[warmup] 92/128
+[warmup] 93/128
+[warmup] 94/128
+[warmup] 95/128
+[warmup] 96/128
+[warmup] 97/128
+[warmup] 98/128
+[warmup] 99/128
+[warmup] 100/128
+[warmup] 101/128
+[warmup] 102/128
+[warmup] 103/128
+[warmup] 104/128
+[warmup] 105/128
+[warmup] 106/128
+[warmup] 107/128
+[warmup] 108/128
+[warmup] 109/128
+[warmup] 110/128
+[warmup] 111/128
+[warmup] 112/128
+[warmup] 113/128
+[warmup] 114/128
+[warmup] 115/128
+[warmup] 116/128
+[warmup] 117/128
+[warmup] 118/128
+[warmup] 119/128
+[warmup] 120/128
+[warmup] 121/128
+[warmup] 122/128
+[warmup] 123/128
+[warmup] 124/128
+[warmup] 125/128
+[warmup] 126/128
+[warmup] 127/128
+[warmup] 128/128
+[progress] 25/1000 requests done
+[progress] 50/1000 requests done
+[progress] 75/1000 requests done
+[progress] 100/1000 requests done
+[progress] 125/1000 requests done
+[progress] 150/1000 requests done
+[progress] 175/1000 requests done
+[progress] 200/1000 requests done
+[progress] 225/1000 requests done
+[progress] 250/1000 requests done
+[progress] 275/1000 requests done
+[progress] 300/1000 requests done
+[progress] 325/1000 requests done
+[progress] 350/1000 requests done
+[progress] 375/1000 requests done
+[progress] 400/1000 requests done
+[progress] 425/1000 requests done
+[progress] 450/1000 requests done
+[progress] 475/1000 requests done
+[progress] 500/1000 requests done
+[progress] 525/1000 requests done
+[progress] 550/1000 requests done
+[progress] 575/1000 requests done
+[progress] 600/1000 requests done
+[progress] 625/1000 requests done
+[progress] 650/1000 requests done
+[progress] 675/1000 requests done
+[progress] 700/1000 requests done
+[progress] 725/1000 requests done
+[progress] 750/1000 requests done
+[progress] 775/1000 requests done
+[progress] 800/1000 requests done
+[progress] 825/1000 requests done
+[progress] 850/1000 requests done
+[progress] 875/1000 requests done
+[progress] 900/1000 requests done
+[progress] 925/1000 requests done
+[progress] 950/1000 requests done
+[progress] 975/1000 requests done
+[progress] 1000/1000 requests done
+{
+  "started_at": "2026-10-17T00:41:42.957666+00:00",
+  "wall_s": 309.59,
+  "requests": 1000,
+  "ok": 1000,
+  "output_tokens": 0,
+  "throughput_tps": 0.0,
+  "ttft_ms_mean": 576.66,
+  "ttft_ms_p50": 541.23,
+  "ttft_ms_p95": 976.77,
+  "tpot_ms_mean": null,
+  "tpot_ms_p50": null,
+  "tpot_ms_p95": null,
+  "latency_ms_mean": 18692.33
+}

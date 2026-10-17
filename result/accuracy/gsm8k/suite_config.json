@@ -1,0 +1,18 @@
+{
+  "model": "qwen38-vllm021",
+  "base_url": "http://127.0.0.1:18680/v1",
+  "model_revision": "",
+  "temperature": 0.0,
+  "max_tokens": 32768,
+  "seed": 20261012,
+  "extra_body": {},
+  "limit": 0,
+  "math_judge": "local",
+  "judge_model": "",
+  "judge_base_url": "",
+  "code_timeout": 6,
+  "data_dir": "/data/tools/vllm-lunch/q38-bw100-sglang/data/accuracy",
+  "script_sha256": "d6fcb7194a713123cdf0bdb1a6cf799f78c6f77474b268a863f79907c2ff65ff",
+  "opencompass_revision": "1543bd270b6fbabb1a118307f78d4144e8296467",
+  "vlmeval_revision": "21e52b8df8ce1f628e93c82de547edb2c985f6ac"
+}

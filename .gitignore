@@ -25,6 +25,10 @@ result/**
 !result/benchmark-*.md
 !result/REPORT.md
 !result/BASELINE_COMPLIANCE.md
+!result/sharegpt/
+!result/sharegpt/**
+!result/accuracy/
+!result/accuracy/**
 # OS
 .DS_Store
 Thumbs.db
